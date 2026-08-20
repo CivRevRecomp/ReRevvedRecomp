@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -23,6 +24,8 @@ REXCVAR_DEFINE_BOOL(qol_probe_gameplay_state, false, "ReRevved/Diagnostics", "Lo
 REXCVAR_DEFINE_BOOL(qol_probe_unit_movement, false, "ReRevved/Diagnostics", "Log bounded unit-move command and simulation edges")
     .debug_only();
 REXCVAR_DEFINE_BOOL(qol_probe_combat, false, "ReRevved/Diagnostics", "Log bounded combat resolution and presentation edges")
+    .debug_only();
+REXCVAR_DEFINE_BOOL(qol_fast_combat, false, "ReRevved/QoL", "Use the native 0.5 pace divisor on the mapped combat presentation path")
     .debug_only();
 
 namespace
@@ -105,6 +108,17 @@ bool TryReadGuestU32(uint32_t address, uint32_t& value)
         return false;
     }
     value = ReadGuestU32(address);
+    return true;
+}
+
+bool TryReadGuestF32(uint32_t address, float& value)
+{
+    uint32_t bits = 0;
+    if (!TryReadGuestU32(address, bits))
+    {
+        return false;
+    }
+    value = std::bit_cast<float>(bits);
     return true;
 }
 
@@ -233,6 +247,18 @@ struct CombatProbeState
 
 thread_local CombatProbeState combat_probe{};
 std::atomic_uint64_t          combat_sequence = 0;
+
+struct CombatPaceProbeState
+{
+    bool     step_active = false;
+    uint64_t setup       = 0;
+    uint64_t steps       = 0;
+    int32_t  counter     = 0;
+    int32_t  progress    = 0;
+    float    divisor     = 0.0f;
+};
+
+thread_local CombatPaceProbeState combat_pace_probe{};
 
 bool CaptureUnitRecord(uint32_t address, std::array<uint8_t, 84>& snapshot)
 {
@@ -722,7 +748,7 @@ void ReRevvedProbeUnitMovePresentationBegin(PPCRegister& ctr)
         unit_move_apply_probe.presentation_target);
 }
 
-void ReRevvedProbeUnitMoveDurationSet(PPCRegister& r11)
+void ReRevvedProbeUnitMoveCooldownSet(PPCRegister& r11)
 {
     if (!REXCVAR_GET(qol_probe_unit_movement) ||
         !unit_move_apply_probe.active)
@@ -731,7 +757,7 @@ void ReRevvedProbeUnitMoveDurationSet(PPCRegister& r11)
     }
 
     REXLOG_INFO(
-        "QoL movement probe: duration-set={} value={}ms",
+        "QoL movement probe: cooldown-set={} value={}ms",
         unit_move_apply_probe.sequence,
         r11.u32);
 }
@@ -1091,6 +1117,150 @@ void ReRevvedProbeCombatResolveEnd(PPCRegister& r1)
         elapsed_ms,
         CurrentThreadToken());
     combat_probe = {};
+}
+
+void ReRevvedProbeCombatPaceSelected()
+{
+    if (!REXCVAR_GET(qol_probe_combat))
+    {
+        combat_pace_probe = {};
+        return;
+    }
+
+    constexpr uint32_t kCombatPaceDivisor = 0x82F79FBC;
+    combat_pace_probe.step_active = false;
+    ++combat_pace_probe.setup;
+    combat_pace_probe.steps = 0;
+    if (!TryReadGuestF32(kCombatPaceDivisor, combat_pace_probe.divisor))
+    {
+        REXLOG_INFO(
+            "QoL combat pace probe: selected={} divisor=unavailable",
+            combat_pace_probe.setup);
+        return;
+    }
+
+    REXLOG_INFO(
+        "QoL combat pace probe: selected={} divisor={:.3f}",
+        combat_pace_probe.setup,
+        combat_pace_probe.divisor);
+}
+
+void ReRevvedProbeCombatPaceStepBegin(PPCRegister& r31)
+{
+    if (!REXCVAR_GET(qol_probe_combat))
+    {
+        combat_pace_probe = {};
+        return;
+    }
+
+    constexpr uint32_t kCombatPaceDivisor = 0x82F79FBC;
+    constexpr uint32_t kFrameProgress      = 0x8314F04C;
+    uint32_t           counter             = 0;
+    uint32_t           progress            = 0;
+    float              divisor             = 0.0f;
+    combat_pace_probe.step_active =
+        TryReadGuestU32(r31.u32 - 4, counter) &&
+        TryReadGuestU32(kFrameProgress, progress) &&
+        TryReadGuestF32(kCombatPaceDivisor, divisor);
+    if (!combat_pace_probe.step_active)
+    {
+        return;
+    }
+
+    combat_pace_probe.counter  = static_cast<int32_t>(counter);
+    combat_pace_probe.progress = static_cast<int32_t>(progress);
+    combat_pace_probe.divisor  = divisor;
+}
+
+void ReRevvedProbeCombatPaceStepEnd(PPCRegister& r11)
+{
+    if (!REXCVAR_GET(qol_probe_combat) ||
+        !combat_pace_probe.step_active)
+    {
+        return;
+    }
+
+    combat_pace_probe.step_active = false;
+    ++combat_pace_probe.steps;
+    if (combat_pace_probe.steps <= 8 || combat_pace_probe.steps % 60 == 0)
+    {
+        REXLOG_INFO(
+            "QoL combat pace probe: step={} setup={} counter={} progress={} "
+            "divisor={:.3f} result={}",
+            combat_pace_probe.steps,
+            combat_pace_probe.setup,
+            combat_pace_probe.counter,
+            combat_pace_probe.progress,
+            combat_pace_probe.divisor,
+            r11.s32);
+    }
+}
+
+void ReRevvedProbeCombatObjectScaleSet()
+{
+    if (!REXCVAR_GET(qol_probe_combat))
+    {
+        return;
+    }
+
+    constexpr uint32_t kCombatObjectRoot = 0x8314F288;
+    constexpr uint32_t kSavedObjectScale = 0x82F79FFC;
+    uint32_t           root              = 0;
+    uint32_t           object            = 0;
+    float              saved             = 0.0f;
+    float              active            = 0.0f;
+    if (!TryReadGuestU32(kCombatObjectRoot, root) ||
+        !TryReadGuestU32(root + 4, object) ||
+        !TryReadGuestF32(kSavedObjectScale, saved) ||
+        !TryReadGuestF32(object + 72, active))
+    {
+        REXLOG_INFO("QoL combat pace probe: object-scale unavailable");
+        return;
+    }
+
+    REXLOG_INFO(
+        "QoL combat pace probe: object={:08X} saved-scale={:.3f} "
+        "active-scale={:.3f}",
+        object,
+        saved,
+        active);
+}
+
+void ReRevvedApplyCombatPaceOverride()
+{
+    if (!REXCVAR_GET(qol_fast_combat))
+    {
+        return;
+    }
+
+    constexpr uint32_t kCombatPaceDivisor = 0x82F79FBC;
+    constexpr float    kObservedNormal     = 2.0f;
+    constexpr float    kNativeFast         = 0.5f;
+    float              selected            = 0.0f;
+    if (!TryReadGuestF32(kCombatPaceDivisor, selected) ||
+        selected != kObservedNormal)
+    {
+        if (REXCVAR_GET(qol_probe_combat))
+        {
+            REXLOG_INFO(
+                "QoL combat pace probe: override skipped divisor={:.3f}",
+                selected);
+        }
+        return;
+    }
+
+    const bool applied = WriteGuestU32Safely(
+        kCombatPaceDivisor,
+        std::bit_cast<uint32_t>(kNativeFast));
+    if (REXCVAR_GET(qol_probe_combat))
+    {
+        REXLOG_INFO(
+            "QoL combat pace probe: override normal={:.3f} fast={:.3f} "
+            "applied={}",
+            selected,
+            kNativeFast,
+            applied);
+    }
 }
 
 void ReRevvedCompatNullOptionalDispatch(PPCRegister& r0, PPCRegister& r3)

@@ -76,7 +76,7 @@ EXPECTED_HOOKS = [
     },
     {
         "address": 0x82CD7580,
-        "name": "ReRevvedProbeUnitMoveDurationSet",
+        "name": "ReRevvedProbeUnitMoveCooldownSet",
         "registers": ["r11"],
     },
     {
@@ -148,6 +148,28 @@ EXPECTED_HOOKS = [
         "address": 0x82CDDEF8,
         "name": "ReRevvedProbeCombatResolveEnd",
         "registers": ["r1"],
+    },
+    {
+        "address": 0x82D66F08,
+        "name": "ReRevvedProbeCombatPaceSelected",
+    },
+    {
+        "address": 0x82D6ADF8,
+        "name": "ReRevvedProbeCombatPaceStepBegin",
+        "registers": ["r31"],
+    },
+    {
+        "address": 0x82D6AE3C,
+        "name": "ReRevvedProbeCombatPaceStepEnd",
+        "registers": ["r11"],
+    },
+    {
+        "address": 0x82D7F930,
+        "name": "ReRevvedProbeCombatObjectScaleSet",
+    },
+    {
+        "address": 0x82D7F934,
+        "name": "ReRevvedApplyCombatPaceOverride",
     },
     {
         "address": 0x8269CAE0,
@@ -313,7 +335,7 @@ class HookContractTests(unittest.TestCase):
         ordinary = [
             (
                 "\t// stw r11,17736(r10)\n"
-                "\tReRevvedProbeUnitMoveDurationSet(ctx.r11);"
+                "\tReRevvedProbeUnitMoveCooldownSet(ctx.r11);"
             ),
             (
                 "\t// bl 0x82d11ad8\n"
@@ -398,6 +420,30 @@ class HookContractTests(unittest.TestCase):
                 "loc_82CDDEF8:\n"
                 "\t// li r3,0\n"
                 "\tReRevvedProbeCombatResolveEnd(ctx.r1);"
+            ),
+            (
+                "loc_82D66F08:\n"
+                "\t// lis r8,-31998\n"
+                "\tReRevvedProbeCombatPaceSelected();"
+            ),
+            (
+                "\t// lfs f0,-24644(r29)\n"
+                "\tReRevvedProbeCombatPaceStepBegin(ctx.r31);"
+            ),
+            (
+                "\t// stw r11,-4(r31)\n"
+                "\tReRevvedProbeCombatPaceStepEnd(ctx.r11);"
+            ),
+            (
+                "\t// bl 0x82d66b20\n"
+                "\tReRevvedProbeCombatObjectScaleSet();\n"
+                "\tctx.lr = 0x82D7F934;"
+            ),
+            (
+                "\tctx.lr = 0x82D7F934;\n"
+                "\tsub_82D66B20(ctx, base);\n"
+                "\t// lwz r11,-3448(r20)\n"
+                "\tReRevvedApplyCombatPaceOverride();"
             ),
         ]
         for placement in placements:

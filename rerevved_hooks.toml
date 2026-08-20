@@ -70,7 +70,7 @@ name = "ReRevvedProbeUnitMovePresentationEnd"
 
 [[midasm_hook]]
 address = 0x82CD7580
-name = "ReRevvedProbeUnitMoveDurationSet"
+name = "ReRevvedProbeUnitMoveCooldownSet"
 registers = ["r11"]
 
 [[midasm_hook]]
@@ -145,6 +145,33 @@ registers = ["r1"]
 address = 0x82CDDEF8
 name = "ReRevvedProbeCombatResolveEnd"
 registers = ["r1"]
+
+# The presentation setup selects a float divisor at 0x82F79FBC. The update
+# path divides its per-frame progress by that value before each resolver call.
+# The probes are read-only. The final default-off hook applies only the native
+# 0.5 test value after an observed-normal 2.0 setup selection.
+
+[[midasm_hook]]
+address = 0x82D66F08
+name = "ReRevvedProbeCombatPaceSelected"
+
+[[midasm_hook]]
+address = 0x82D6ADF8
+name = "ReRevvedProbeCombatPaceStepBegin"
+registers = ["r31"]
+
+[[midasm_hook]]
+address = 0x82D6AE3C
+name = "ReRevvedProbeCombatPaceStepEnd"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x82D7F930
+name = "ReRevvedProbeCombatObjectScaleSet"
+
+[[midasm_hook]]
+address = 0x82D7F934
+name = "ReRevvedApplyCombatPaceOverride"
 
 # Ring-buffer initialization brackets the guest reset. Pause the host GPU while
 # the guest resets the ring, then resume it before the next instruction.
