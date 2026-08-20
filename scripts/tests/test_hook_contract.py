@@ -172,6 +172,27 @@ EXPECTED_HOOKS = [
         "name": "ReRevvedApplyCombatPaceOverride",
     },
     {
+        "address": 0x82CE2938,
+        "name": "ReRevvedProbeRushCostDisplay",
+        "registers": ["r27", "r29", "r30", "r31", "r6", "r7", "r11"],
+    },
+    {
+        "address": 0x82D17A9C,
+        "name": "ReRevvedProbeRushCostApply",
+        "registers": [
+            "r24",
+            "r25",
+            "r26",
+            "r28",
+            "r30",
+            "r31",
+            "r3",
+            "r6",
+            "r8",
+            "r11",
+        ],
+    },
+    {
         "address": 0x8269CAE0,
         "name": "ReRevvedCompatRingInitializeBegin",
         "registers": ["r3", "r4"],
@@ -444,6 +465,28 @@ class HookContractTests(unittest.TestCase):
                 "\tsub_82D66B20(ctx, base);\n"
                 "\t// lwz r11,-3448(r20)\n"
                 "\tReRevvedApplyCombatPaceOverride();"
+            ),
+        ]
+        for placement in placements:
+            self.assertEqual(generated.count(placement), 1)
+
+    def test_generated_rush_cost_probe_placement_when_available(self) -> None:
+        paths = sorted(GENERATED.glob("rerevved_recomp.*.cpp"))
+        if not paths:
+            self.skipTest("generated sources are not available")
+
+        generated = "".join(path.read_text(encoding="utf-8") for path in paths)
+        placements = [
+            (
+                "\t// cmpwi cr6,r30,29\n"
+                "\tReRevvedProbeRushCostDisplay(ctx.r27, ctx.r29, ctx.r30, "
+                "ctx.r31, ctx.r6, ctx.r7, ctx.r11);"
+            ),
+            (
+                "\t// cmpwi cr6,r25,119\n"
+                "\tReRevvedProbeRushCostApply(ctx.r24, ctx.r25, ctx.r26, "
+                "ctx.r28, ctx.r30, ctx.r31, ctx.r3, ctx.r6, ctx.r8, "
+                "ctx.r11);"
             ),
         ]
         for placement in placements:

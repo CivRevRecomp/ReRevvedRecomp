@@ -173,6 +173,21 @@ name = "ReRevvedProbeCombatObjectScaleSet"
 address = 0x82D7F934
 name = "ReRevvedApplyCombatPaceOverride"
 
+# The unit branch of the central rush-cost routine computes the displayed and
+# submitted cost at 0x82CE2934. The Rush command consumer later converts that
+# submitted gold amount back into production before storing both production and
+# treasury. These default-off hooks are read-only and bracket both values.
+
+[[midasm_hook]]
+address = 0x82CE2938
+name = "ReRevvedProbeRushCostDisplay"
+registers = ["r27", "r29", "r30", "r31", "r6", "r7", "r11"]
+
+[[midasm_hook]]
+address = 0x82D17A9C
+name = "ReRevvedProbeRushCostApply"
+registers = ["r24", "r25", "r26", "r28", "r30", "r31", "r3", "r6", "r8", "r11"]
+
 # Ring-buffer initialization brackets the guest reset. Pause the host GPU while
 # the guest resets the ring, then resume it before the next instruction.
 

@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <thread>
 
 #include <rex/cvar.h>
@@ -24,6 +25,8 @@ REXCVAR_DEFINE_BOOL(qol_probe_gameplay_state, false, "ReRevved/Diagnostics", "Lo
 REXCVAR_DEFINE_BOOL(qol_probe_unit_movement, false, "ReRevved/Diagnostics", "Log bounded unit-move command and simulation edges")
     .debug_only();
 REXCVAR_DEFINE_BOOL(qol_probe_combat, false, "ReRevved/Diagnostics", "Log bounded combat resolution and presentation edges")
+    .debug_only();
+REXCVAR_DEFINE_BOOL(qol_probe_rush_cost, false, "ReRevved/Diagnostics", "Log displayed and applied unit rush-cost arithmetic")
     .debug_only();
 REXCVAR_DEFINE_BOOL(qol_fast_combat, false, "ReRevved/QoL", "Use the native 0.5 pace divisor on the mapped combat presentation path")
     .debug_only();
@@ -259,6 +262,81 @@ struct CombatPaceProbeState
 };
 
 thread_local CombatPaceProbeState combat_pace_probe{};
+
+struct RushCostDisplaySnapshot
+{
+    uint32_t city       = UINT32_MAX;
+    uint32_t player     = UINT32_MAX;
+    uint32_t civ        = UINT32_MAX;
+    int32_t  era        = -1;
+    int32_t  item       = -1;
+    int32_t  remaining  = -1;
+    int32_t  multiplier = -1;
+    int32_t  divisor    = -1;
+    int32_t  native     = -1;
+    int32_t  corrected  = -1;
+
+    bool operator==(const RushCostDisplaySnapshot&) const = default;
+};
+
+struct RushCostProbeState
+{
+    bool                    display_valid = false;
+    RushCostDisplaySnapshot display;
+};
+
+thread_local RushCostProbeState rush_cost_probe{};
+
+bool TryCalculateCorrectedRushCost(int32_t  multiplier,
+                                   int32_t  divisor,
+                                   int32_t  remaining,
+                                   int32_t& corrected)
+{
+    if (multiplier <= 0 || divisor <= 0 || remaining < 0)
+    {
+        return false;
+    }
+
+    const int64_t product = static_cast<int64_t>(multiplier) * remaining;
+    const int64_t value   = (product + divisor - 1) / divisor;
+    if (value > std::numeric_limits<int32_t>::max())
+    {
+        return false;
+    }
+
+    corrected = static_cast<int32_t>(value);
+    return true;
+}
+
+void ResolveRushCostOwner(uint32_t  city_offset,
+                          uint32_t& city,
+                          uint32_t& player,
+                          uint32_t& civ)
+{
+    constexpr uint32_t kCityTable   = 0x8314FE28;
+    constexpr uint32_t kCitySize    = 188;
+    constexpr uint32_t kPlayerCivs  = 0x830ECD28;
+    constexpr uint32_t kPlayerCount = 6;
+
+    city   = UINT32_MAX;
+    player = UINT32_MAX;
+    civ    = UINT32_MAX;
+    if (city_offset % kCitySize != 0)
+    {
+        return;
+    }
+
+    uint8_t owner = 0;
+    if (!TryReadGuestU8(kCityTable + city_offset, owner) ||
+        owner >= kPlayerCount)
+    {
+        return;
+    }
+
+    city   = city_offset / kCitySize;
+    player = owner;
+    TryReadGuestU32(kPlayerCivs + player * sizeof(uint32_t), civ);
+}
 
 bool CaptureUnitRecord(uint32_t address, std::array<uint8_t, 84>& snapshot)
 {
@@ -1128,7 +1206,7 @@ void ReRevvedProbeCombatPaceSelected()
     }
 
     constexpr uint32_t kCombatPaceDivisor = 0x82F79FBC;
-    combat_pace_probe.step_active = false;
+    combat_pace_probe.step_active         = false;
     ++combat_pace_probe.setup;
     combat_pace_probe.steps = 0;
     if (!TryReadGuestF32(kCombatPaceDivisor, combat_pace_probe.divisor))
@@ -1154,10 +1232,10 @@ void ReRevvedProbeCombatPaceStepBegin(PPCRegister& r31)
     }
 
     constexpr uint32_t kCombatPaceDivisor = 0x82F79FBC;
-    constexpr uint32_t kFrameProgress      = 0x8314F04C;
-    uint32_t           counter             = 0;
-    uint32_t           progress            = 0;
-    float              divisor             = 0.0f;
+    constexpr uint32_t kFrameProgress     = 0x8314F04C;
+    uint32_t           counter            = 0;
+    uint32_t           progress           = 0;
+    float              divisor            = 0.0f;
     combat_pace_probe.step_active =
         TryReadGuestU32(r31.u32 - 4, counter) &&
         TryReadGuestU32(kFrameProgress, progress) &&
@@ -1234,9 +1312,9 @@ void ReRevvedApplyCombatPaceOverride()
     }
 
     constexpr uint32_t kCombatPaceDivisor = 0x82F79FBC;
-    constexpr float    kObservedNormal     = 2.0f;
-    constexpr float    kNativeFast         = 0.5f;
-    float              selected            = 0.0f;
+    constexpr float    kObservedNormal    = 2.0f;
+    constexpr float    kNativeFast        = 0.5f;
+    float              selected           = 0.0f;
     if (!TryReadGuestF32(kCombatPaceDivisor, selected) ||
         selected != kObservedNormal)
     {
@@ -1261,6 +1339,104 @@ void ReRevvedApplyCombatPaceOverride()
             kNativeFast,
             applied);
     }
+}
+
+void ReRevvedProbeRushCostDisplay(PPCRegister& r27,
+                                  PPCRegister& r29,
+                                  PPCRegister& r30,
+                                  PPCRegister& r31,
+                                  PPCRegister& r6,
+                                  PPCRegister& r7,
+                                  PPCRegister& r11)
+{
+    if (!REXCVAR_GET(qol_probe_rush_cost))
+    {
+        rush_cost_probe = {};
+        return;
+    }
+
+    RushCostDisplaySnapshot snapshot{};
+    ResolveRushCostOwner(
+        r27.u32,
+        snapshot.city,
+        snapshot.player,
+        snapshot.civ);
+    snapshot.era        = r29.s32;
+    snapshot.item       = r30.s32;
+    snapshot.remaining  = r7.s32;
+    snapshot.multiplier = r31.s32;
+    snapshot.divisor    = r6.s32;
+    snapshot.native     = r11.s32;
+    if (!TryCalculateCorrectedRushCost(
+            snapshot.multiplier,
+            snapshot.divisor,
+            snapshot.remaining,
+            snapshot.corrected))
+    {
+        snapshot.corrected = -1;
+    }
+
+    if (rush_cost_probe.display_valid &&
+        rush_cost_probe.display == snapshot)
+    {
+        return;
+    }
+
+    rush_cost_probe.display_valid = true;
+    rush_cost_probe.display       = snapshot;
+    REXLOG_INFO(
+        "QoL rush-cost probe: display city={} player={} civ={} era={} "
+        "item={} remaining={} multiplier={} divisor={} native={} "
+        "corrected={}",
+        snapshot.city,
+        snapshot.player,
+        snapshot.civ,
+        snapshot.era,
+        snapshot.item,
+        snapshot.remaining,
+        snapshot.multiplier,
+        snapshot.divisor,
+        snapshot.native,
+        snapshot.corrected);
+}
+
+void ReRevvedProbeRushCostApply(PPCRegister& r24,
+                                PPCRegister& r25,
+                                PPCRegister& r26,
+                                PPCRegister& r28,
+                                PPCRegister& r30,
+                                PPCRegister& r31,
+                                PPCRegister& r3,
+                                PPCRegister& r6,
+                                PPCRegister& r8,
+                                PPCRegister& r11)
+{
+    if (!REXCVAR_GET(qol_probe_rush_cost))
+    {
+        return;
+    }
+
+    uint32_t city   = UINT32_MAX;
+    uint32_t player = UINT32_MAX;
+    uint32_t civ    = UINT32_MAX;
+    ResolveRushCostOwner(r28.u32, city, player, civ);
+    REXLOG_INFO(
+        "QoL rush-cost probe: apply city={} command-city={} player={} civ={} "
+        "era={} item={} command-cost={} multiplier={} "
+        "production-before={} production-bought={} production-after={} "
+        "treasury-after={}",
+        city,
+        r24.u32,
+        player,
+        civ,
+        r30.s32,
+        r25.s32,
+        r26.s32,
+        r31.s32,
+        r6.s32,
+        r8.s32,
+        r3.s32,
+        r11.s32);
 }
 
 void ReRevvedCompatNullOptionalDispatch(PPCRegister& r0, PPCRegister& r3)
