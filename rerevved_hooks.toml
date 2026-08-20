@@ -211,6 +211,20 @@ address = 0x82D17A9C
 name = "ReRevvedProbeRushCostApply"
 registers = ["r24", "r25", "r26", "r28", "r30", "r31", "r3", "r6", "r8", "r11"]
 
+# Native manual save and load consume the selected content record's internal
+# identifier at +0x108. The load entry is the pre-deserialization intervention
+# point; the save hook observes the final result after file finalization.
+
+[[midasm_hook]]
+address = 0x82D84238
+name = "ReRevvedProbeSaveSlotLoadBegin"
+registers = ["r4"]
+
+[[midasm_hook]]
+address = 0x82D829E8
+name = "ReRevvedProbeSaveSlotSaveOutcome"
+registers = ["r25", "r29"]
+
 # Ring-buffer initialization brackets the guest reset. Pause the host GPU while
 # the guest resets the ring, then resume it before the next instruction.
 

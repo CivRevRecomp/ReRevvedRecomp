@@ -208,6 +208,16 @@ EXPECTED_HOOKS = [
         ],
     },
     {
+        "address": 0x82D84238,
+        "name": "ReRevvedProbeSaveSlotLoadBegin",
+        "registers": ["r4"],
+    },
+    {
+        "address": 0x82D829E8,
+        "name": "ReRevvedProbeSaveSlotSaveOutcome",
+        "registers": ["r25", "r29"],
+    },
+    {
         "address": 0x8269CAE0,
         "name": "ReRevvedCompatRingInitializeBegin",
         "registers": ["r3", "r4"],
@@ -502,6 +512,29 @@ class HookContractTests(unittest.TestCase):
                 "\tReRevvedProbeRushCostApply(ctx.r24, ctx.r25, ctx.r26, "
                 "ctx.r28, ctx.r30, ctx.r31, ctx.r3, ctx.r6, ctx.r8, "
                 "ctx.r11);"
+            ),
+        ]
+        for placement in placements:
+            self.assertEqual(generated.count(placement), 1)
+
+    def test_generated_save_slot_probe_placement_when_available(self) -> None:
+        paths = sorted(GENERATED.glob("rerevved_recomp.*.cpp"))
+        if not paths:
+            self.skipTest("generated sources are not available")
+
+        generated = "".join(path.read_text(encoding="utf-8") for path in paths)
+        placements = [
+            (
+                "DEFINE_REX_FUNC(sub_82D84238) {\n"
+                "\tREX_FUNC_PROLOGUE();\n"
+                "\tuint32_t ea{};\n"
+                "\t// mflr r12\n"
+                "\tReRevvedProbeSaveSlotLoadBegin(ctx.r4);"
+            ),
+            (
+                "loc_82D829E8:\n"
+                "\t// lwz r3,-3456(r28)\n"
+                "\tReRevvedProbeSaveSlotSaveOutcome(ctx.r25, ctx.r29);"
             ),
         ]
         for placement in placements:

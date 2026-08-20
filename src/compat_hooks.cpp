@@ -32,6 +32,8 @@ REXCVAR_DEFINE_BOOL(qol_probe_unit_stats, false, "ReRevved/Diagnostics", "Compar
     .debug_only();
 REXCVAR_DEFINE_BOOL(qol_probe_rush_cost, false, "ReRevved/Diagnostics", "Log displayed and applied unit rush-cost arithmetic")
     .debug_only();
+REXCVAR_DEFINE_BOOL(qol_probe_save_slots, false, "ReRevved/Diagnostics", "Log selected save-slot identifiers at native load and save boundaries")
+    .debug_only();
 REXCVAR_DEFINE_BOOL(qol_fast_combat, false, "ReRevved/QoL", "Use the native 0.5 pace divisor on the mapped combat presentation path")
     .debug_only();
 
@@ -127,6 +129,32 @@ bool TryReadGuestF32(uint32_t address, float& value)
     }
     value = std::bit_cast<float>(bits);
     return true;
+}
+
+template <size_t Size>
+bool TryReadGuestText(uint32_t address, std::array<char, Size>& text)
+{
+    static_assert(Size > 1);
+    text = {};
+    if (!IsGuestReadableRange(address, Size))
+    {
+        return false;
+    }
+
+    const auto* memory = REX_KERNEL_MEMORY();
+    const auto* source = memory->TranslateVirtual<const uint8_t*>(address);
+    for (size_t index = 0; index < Size - 1; ++index)
+    {
+        const uint8_t value = source[index];
+        if (value == 0)
+        {
+            return index != 0;
+        }
+        text[index] = value >= 0x20 && value <= 0x7E
+                          ? static_cast<char>(value)
+                          : '?';
+    }
+    return false;
 }
 
 bool WriteGuestU32Safely(uint32_t address, uint32_t value)
@@ -1733,6 +1761,41 @@ void ReRevvedProbeRushCostApply(PPCRegister& r24,
         r8.s32,
         r3.s32,
         r11.s32);
+}
+
+void ReRevvedProbeSaveSlotLoadBegin(PPCRegister& r4)
+{
+    if (!REXCVAR_GET(qol_probe_save_slots))
+    {
+        return;
+    }
+
+    constexpr uint32_t   kInternalSlotIdOffset = 0x108;
+    std::array<char, 43> slot{};
+    const uint32_t       slot_address = r4.u32 + kInternalSlotIdOffset;
+    const bool           valid        = r4.u32 <= UINT32_MAX - kInternalSlotIdOffset &&
+                                        TryReadGuestText(slot_address, slot);
+    REXLOG_INFO(
+        "QoL save-slot probe: load-begin record={:08X} slot={} valid={}",
+        r4.u32,
+        valid ? slot.data() : "<unavailable>",
+        valid);
+}
+
+void ReRevvedProbeSaveSlotSaveOutcome(PPCRegister& r25, PPCRegister& r29)
+{
+    if (!REXCVAR_GET(qol_probe_save_slots))
+    {
+        return;
+    }
+
+    std::array<char, 43> slot{};
+    const bool           valid = TryReadGuestText(r29.u32, slot);
+    REXLOG_INFO(
+        "QoL save-slot probe: save-end slot={} valid={} success={}",
+        valid ? slot.data() : "<unavailable>",
+        valid,
+        r25.u32 != 0);
 }
 
 void ReRevvedCompatNullOptionalDispatch(PPCRegister& r0, PPCRegister& r3)
