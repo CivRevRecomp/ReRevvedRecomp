@@ -18,6 +18,8 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/xmemory.h>
 
+#include "gameplay_state.h"
+
 REXCVAR_DEFINE_BOOL(qol_probe_gameplay_frame, false, "ReRevved/Diagnostics", "Log the candidate playable-frame cadence and thread")
     .debug_only();
 REXCVAR_DEFINE_BOOL(qol_probe_gameplay_state, false, "ReRevved/Diagnostics", "Log conservative gameplay-state gate transitions")
@@ -200,22 +202,7 @@ struct GameplayFrameProbeState
 
 thread_local GameplayFrameProbeState gameplay_frame_probe{};
 
-struct GameplayStateSnapshot
-{
-    uint32_t frontend_root     = 0;
-    uint32_t frontend_state    = 0;
-    uint32_t frontend_key      = UINT32_MAX;
-    uint32_t active_player     = UINT32_MAX;
-    uint32_t human_player_mask = 0;
-    uint32_t interface_gate    = 0;
-    bool     gameplay_active   = false;
-    bool     turn_owner_known  = false;
-    bool     human_turn        = false;
-    bool     interface_update  = false;
-    bool     api_available     = false;
-
-    bool operator==(const GameplayStateSnapshot&) const = default;
-};
+using GameplayStateSnapshot = rerevved::gameplay::Snapshot;
 
 struct GameplayStateProbeState
 {
@@ -604,46 +591,6 @@ void LogUnitRecordSnapshot(uint64_t                       sequence,
         UnitRecordU16(snapshot, 0x4E));
 }
 
-constexpr uint32_t kInterfaceGateGlobal   = 0x8314F28C;
-constexpr uint32_t kFrontendRootGlobal    = 0x82FFD624;
-constexpr uint32_t kActivePlayerGlobal    = 0x8312B8E8;
-constexpr uint32_t kHumanPlayerMaskGlobal = 0x8312E608;
-
-GameplayStateSnapshot ReadGameplayState()
-{
-    GameplayStateSnapshot state{};
-
-    if (TryReadGuestU32(kFrontendRootGlobal, state.frontend_root) &&
-        state.frontend_root != 0 &&
-        TryReadGuestU32(state.frontend_root + 0x70, state.frontend_state) &&
-        state.frontend_state != 0 &&
-        TryReadGuestU32(state.frontend_state + 4, state.frontend_key))
-    {
-        state.gameplay_active = state.frontend_key == 2;
-    }
-
-    if (TryReadGuestU32(kActivePlayerGlobal, state.active_player) &&
-        TryReadGuestU32(kHumanPlayerMaskGlobal, state.human_player_mask) &&
-        state.active_player < 32 && state.human_player_mask != 0)
-    {
-        state.turn_owner_known = true;
-        state.human_turn =
-            (state.human_player_mask & (uint32_t{ 1 } << state.active_player)) != 0;
-    }
-
-    uint8_t byte = 0;
-    if (TryReadGuestU32(kInterfaceGateGlobal, state.interface_gate) &&
-        state.interface_gate != 0 &&
-        TryReadGuestU8(state.interface_gate + 5, byte))
-    {
-        state.interface_update = byte != 0;
-    }
-
-    state.api_available = state.gameplay_active && state.interface_update &&
-                          state.turn_owner_known && state.human_turn;
-    return state;
-}
-
 enum class UnitStatConsumer : uint8_t
 {
     combat,
@@ -718,7 +665,7 @@ void RecordUnitStatLookup(const char*  stat,
         return;
     }
 
-    const auto     gameplay = ReadGameplayState();
+    const auto     gameplay = rerevved::gameplay::ReadGuestSnapshot();
     const uint32_t active_player =
         gameplay.active_player < kPlayerCount ? gameplay.active_player : 7;
     const uint32_t consumer_index = static_cast<uint32_t>(consumer);
@@ -788,6 +735,8 @@ void ReRevvedProbeGameStart()
 
 void ReRevvedProbeGameplayFrame()
 {
+    rerevved::gameplay::PublishFrameSnapshot();
+
     const bool probe_frame = REXCVAR_GET(qol_probe_gameplay_frame);
     const bool probe_state = REXCVAR_GET(qol_probe_gameplay_state);
     if (!probe_frame && !probe_state)
@@ -834,9 +783,13 @@ void ReRevvedProbeGameplayFrame()
     if (probe_state)
     {
         ++gameplay_state_probe.frames;
-        const GameplayStateSnapshot state = ReadGameplayState();
+        GameplayStateSnapshot state{};
+        if (!rerevved::gameplay::GetPublishedSnapshot(state))
+        {
+            return;
+        }
         if (!gameplay_state_probe.active ||
-            !(state == gameplay_state_probe.last))
+            !state.SameState(gameplay_state_probe.last))
         {
             gameplay_state_probe.active = true;
             gameplay_state_probe.last   = state;
@@ -857,7 +810,7 @@ void ReRevvedProbeGameplayFrame()
                 state.human_turn,
                 state.interface_gate,
                 state.interface_update,
-                state.api_available);
+                state.available);
         }
     }
 }

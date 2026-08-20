@@ -1,6 +1,6 @@
-# Default-off diagnostic for the candidate playable-frame boundary. The start
-# hook records the AudioGameStartInit thread; the frame hook reports cadence
-# and whether later frame work remains on that thread.
+# The proved gameplay-frame hook publishes the read-only title API snapshot on
+# every frame. Its diagnostics remain default-off; the start hook records the
+# AudioGameStartInit thread for the optional cadence report.
 
 [[midasm_hook]]
 address = 0x82E60F70
