@@ -1,13 +1,21 @@
 // Hooks preserve title behavior unless documented as a compatibility repair.
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <functional>
+#include <thread>
 
+#include <rex/cvar.h>
+#include <rex/logging.h>
 #include <rex/ppc.h>
 #include <rex/runtime.h>
 #include <rex/system/interfaces/graphics.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xmemory.h>
+
+REXCVAR_DEFINE_BOOL(qol_probe_gameplay_frame, false, "ReRevved/Diagnostics", "Log the candidate playable-frame cadence and thread")
+    .debug_only();
 
 namespace
 {
@@ -101,7 +109,80 @@ thread_local uint32_t           gfx_render_config_renderer       = 0;
 std::atomic_uint32_t            gfx_stale_render_config          = 0;
 std::atomic_uint32_t            gfx_stale_render_config_renderer = 0;
 
+std::atomic_bool     gameplay_start_seen   = false;
+std::atomic_uint64_t gameplay_start_thread = 0;
+
+struct GameplayFrameProbeState
+{
+    bool                                  active = false;
+    uint64_t                              frames = 0;
+    std::chrono::steady_clock::time_point first_frame;
+};
+
+thread_local GameplayFrameProbeState gameplay_frame_probe{};
+
+uint64_t CurrentThreadToken()
+{
+    return static_cast<uint64_t>(
+        std::hash<std::thread::id>{}(std::this_thread::get_id()));
+}
+
 } // namespace
+
+void ReRevvedProbeGameStart()
+{
+    if (!REXCVAR_GET(qol_probe_gameplay_frame))
+    {
+        return;
+    }
+
+    const uint64_t thread = CurrentThreadToken();
+    gameplay_start_thread.store(thread, std::memory_order_release);
+    gameplay_start_seen.store(true, std::memory_order_release);
+    REXLOG_INFO("QoL frame probe: AudioGameStartInit thread={:016X}", thread);
+}
+
+void ReRevvedProbeGameplayFrame()
+{
+    if (!REXCVAR_GET(qol_probe_gameplay_frame))
+    {
+        gameplay_frame_probe = {};
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    if (!gameplay_frame_probe.active)
+    {
+        gameplay_frame_probe.active      = true;
+        gameplay_frame_probe.first_frame = now;
+    }
+
+    ++gameplay_frame_probe.frames;
+    if (gameplay_frame_probe.frames != 1 &&
+        gameplay_frame_probe.frames % 300 != 0)
+    {
+        return;
+    }
+
+    const uint64_t thread       = CurrentThreadToken();
+    const bool     start_seen   = gameplay_start_seen.load(std::memory_order_acquire);
+    const uint64_t start_thread = gameplay_start_thread.load(std::memory_order_acquire);
+    const double   elapsed =
+        std::chrono::duration<double>(now - gameplay_frame_probe.first_frame)
+            .count();
+    const double cadence =
+        elapsed > 0.0 ? (gameplay_frame_probe.frames - 1) / elapsed : 0.0;
+
+    REXLOG_INFO(
+        "QoL frame probe: frames={} elapsed={:.3f}s cadence={:.2f}Hz "
+        "thread={:016X} game_start_seen={} start_thread_match={}",
+        gameplay_frame_probe.frames,
+        elapsed,
+        cadence,
+        thread,
+        start_seen,
+        start_seen && thread == start_thread);
+}
 
 void ReRevvedCompatNullOptionalDispatch(PPCRegister& r0, PPCRegister& r3)
 {

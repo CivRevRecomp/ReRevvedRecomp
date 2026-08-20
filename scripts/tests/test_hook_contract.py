@@ -13,6 +13,14 @@ GENERATED = ROOT / "generated" / "default"
 
 EXPECTED_HOOKS = [
     {
+        "address": 0x82E60F70,
+        "name": "ReRevvedProbeGameStart",
+    },
+    {
+        "address": 0x82C7DF58,
+        "name": "ReRevvedProbeGameplayFrame",
+    },
+    {
         "address": 0x8269CAE0,
         "name": "ReRevvedCompatRingInitializeBegin",
         "registers": ["r3", "r4"],
@@ -80,6 +88,26 @@ class HookContractTests(unittest.TestCase):
             "\tReRevvedCompatRingInitializeEnd();"
         )
         self.assertEqual(generated.count(expected), 1)
+
+    def test_generated_gameplay_probe_placement_when_available(self) -> None:
+        paths = sorted(GENERATED.glob("rerevved_recomp.*.cpp"))
+        if not paths:
+            self.skipTest("generated sources are not available")
+
+        generated = "".join(path.read_text(encoding="utf-8") for path in paths)
+        expected = {
+            "sub_82E60F70": "ReRevvedProbeGameStart();",
+            "sub_82C7DF58": "ReRevvedProbeGameplayFrame();",
+        }
+        for function, hook in expected.items():
+            placement = (
+                f"DEFINE_REX_FUNC({function}) {{\n"
+                "\tREX_FUNC_PROLOGUE();\n"
+                "\tuint32_t ea{};\n"
+                "\t// mflr r12\n"
+                f"\t{hook}"
+            )
+            self.assertEqual(generated.count(placement), 1)
 
     def test_generated_vector_glyph_cache_hook_when_available(self) -> None:
         paths = sorted(GENERATED.glob("rerevved_recomp.*.cpp"))

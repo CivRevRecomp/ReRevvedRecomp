@@ -1,3 +1,15 @@
+# Default-off diagnostic for the candidate playable-frame boundary. The start
+# hook records the AudioGameStartInit thread; the frame hook reports cadence
+# and whether later frame work remains on that thread.
+
+[[midasm_hook]]
+address = 0x82E60F70
+name = "ReRevvedProbeGameStart"
+
+[[midasm_hook]]
+address = 0x82C7DF58
+name = "ReRevvedProbeGameplayFrame"
+
 # Ring-buffer initialization brackets the guest reset. Pause the host GPU while
 # the guest resets the ring, then resume it before the next instruction.
 
