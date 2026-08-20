@@ -16,6 +16,8 @@
 
 REXCVAR_DEFINE_BOOL(qol_probe_gameplay_frame, false, "ReRevved/Diagnostics", "Log the candidate playable-frame cadence and thread")
     .debug_only();
+REXCVAR_DEFINE_BOOL(qol_probe_gameplay_state, false, "ReRevved/Diagnostics", "Log conservative gameplay-state gate transitions")
+    .debug_only();
 
 namespace
 {
@@ -78,6 +80,28 @@ uint32_t ReadGuestU32(uint32_t address)
            (uint32_t{ source[2] } << 8) | uint32_t{ source[3] };
 }
 
+bool TryReadGuestU8(uint32_t address, uint8_t& value)
+{
+    if (!IsGuestReadableRange(address, sizeof(uint8_t)))
+    {
+        return false;
+    }
+    const auto* memory = REX_KERNEL_MEMORY();
+    const auto* source = memory->TranslateVirtual<const uint8_t*>(address);
+    value              = source[0];
+    return true;
+}
+
+bool TryReadGuestU32(uint32_t address, uint32_t& value)
+{
+    if (!IsGuestReadableRange(address, sizeof(uint32_t)))
+    {
+        return false;
+    }
+    value = ReadGuestU32(address);
+    return true;
+}
+
 bool WriteGuestU32Safely(uint32_t address, uint32_t value)
 {
     if (!IsGuestReadableRange(address, sizeof(uint32_t)))
@@ -121,6 +145,72 @@ struct GameplayFrameProbeState
 
 thread_local GameplayFrameProbeState gameplay_frame_probe{};
 
+struct GameplayStateSnapshot
+{
+    uint32_t frontend_root     = 0;
+    uint32_t frontend_state    = 0;
+    uint32_t frontend_key      = UINT32_MAX;
+    uint32_t active_player     = UINT32_MAX;
+    uint32_t human_player_mask = 0;
+    uint32_t interface_gate    = 0;
+    bool     gameplay_active   = false;
+    bool     turn_owner_known  = false;
+    bool     human_turn        = false;
+    bool     interface_update  = false;
+    bool     api_available     = false;
+
+    bool operator==(const GameplayStateSnapshot&) const = default;
+};
+
+struct GameplayStateProbeState
+{
+    bool                  active = false;
+    uint64_t              frames = 0;
+    GameplayStateSnapshot last;
+};
+
+thread_local GameplayStateProbeState gameplay_state_probe{};
+
+constexpr uint32_t kInterfaceGateGlobal   = 0x8314F28C;
+constexpr uint32_t kFrontendRootGlobal    = 0x82FFD624;
+constexpr uint32_t kActivePlayerGlobal    = 0x8312B8E8;
+constexpr uint32_t kHumanPlayerMaskGlobal = 0x8312E608;
+
+GameplayStateSnapshot ReadGameplayState()
+{
+    GameplayStateSnapshot state{};
+
+    if (TryReadGuestU32(kFrontendRootGlobal, state.frontend_root) &&
+        state.frontend_root != 0 &&
+        TryReadGuestU32(state.frontend_root + 0x70, state.frontend_state) &&
+        state.frontend_state != 0 &&
+        TryReadGuestU32(state.frontend_state + 4, state.frontend_key))
+    {
+        state.gameplay_active = state.frontend_key == 2;
+    }
+
+    if (TryReadGuestU32(kActivePlayerGlobal, state.active_player) &&
+        TryReadGuestU32(kHumanPlayerMaskGlobal, state.human_player_mask) &&
+        state.active_player < 32 && state.human_player_mask != 0)
+    {
+        state.turn_owner_known = true;
+        state.human_turn =
+            (state.human_player_mask & (uint32_t{ 1 } << state.active_player)) != 0;
+    }
+
+    uint8_t byte = 0;
+    if (TryReadGuestU32(kInterfaceGateGlobal, state.interface_gate) &&
+        state.interface_gate != 0 &&
+        TryReadGuestU8(state.interface_gate + 5, byte))
+    {
+        state.interface_update = byte != 0;
+    }
+
+    state.api_available = state.gameplay_active && state.interface_update &&
+                          state.turn_owner_known && state.human_turn;
+    return state;
+}
+
 uint64_t CurrentThreadToken()
 {
     return static_cast<uint64_t>(
@@ -144,44 +234,78 @@ void ReRevvedProbeGameStart()
 
 void ReRevvedProbeGameplayFrame()
 {
-    if (!REXCVAR_GET(qol_probe_gameplay_frame))
+    const bool probe_frame = REXCVAR_GET(qol_probe_gameplay_frame);
+    const bool probe_state = REXCVAR_GET(qol_probe_gameplay_state);
+    if (!probe_frame && !probe_state)
     {
         gameplay_frame_probe = {};
+        gameplay_state_probe = {};
         return;
     }
 
     const auto now = std::chrono::steady_clock::now();
-    if (!gameplay_frame_probe.active)
+    if (probe_frame && !gameplay_frame_probe.active)
     {
         gameplay_frame_probe.active      = true;
         gameplay_frame_probe.first_frame = now;
     }
 
-    ++gameplay_frame_probe.frames;
-    if (gameplay_frame_probe.frames != 1 &&
-        gameplay_frame_probe.frames % 300 != 0)
+    if (probe_frame)
     {
-        return;
+        ++gameplay_frame_probe.frames;
+        if (gameplay_frame_probe.frames == 1 ||
+            gameplay_frame_probe.frames % 300 == 0)
+        {
+            const uint64_t thread       = CurrentThreadToken();
+            const bool     start_seen   = gameplay_start_seen.load(std::memory_order_acquire);
+            const uint64_t start_thread = gameplay_start_thread.load(std::memory_order_acquire);
+            const double   elapsed =
+                std::chrono::duration<double>(now - gameplay_frame_probe.first_frame)
+                    .count();
+            const double cadence =
+                elapsed > 0.0 ? (gameplay_frame_probe.frames - 1) / elapsed : 0.0;
+
+            REXLOG_INFO(
+                "QoL frame probe: frames={} elapsed={:.3f}s cadence={:.2f}Hz "
+                "thread={:016X} game_start_seen={} start_thread_match={}",
+                gameplay_frame_probe.frames,
+                elapsed,
+                cadence,
+                thread,
+                start_seen,
+                start_seen && thread == start_thread);
+        }
     }
 
-    const uint64_t thread       = CurrentThreadToken();
-    const bool     start_seen   = gameplay_start_seen.load(std::memory_order_acquire);
-    const uint64_t start_thread = gameplay_start_thread.load(std::memory_order_acquire);
-    const double   elapsed =
-        std::chrono::duration<double>(now - gameplay_frame_probe.first_frame)
-            .count();
-    const double cadence =
-        elapsed > 0.0 ? (gameplay_frame_probe.frames - 1) / elapsed : 0.0;
-
-    REXLOG_INFO(
-        "QoL frame probe: frames={} elapsed={:.3f}s cadence={:.2f}Hz "
-        "thread={:016X} game_start_seen={} start_thread_match={}",
-        gameplay_frame_probe.frames,
-        elapsed,
-        cadence,
-        thread,
-        start_seen,
-        start_seen && thread == start_thread);
+    if (probe_state)
+    {
+        ++gameplay_state_probe.frames;
+        const GameplayStateSnapshot state = ReadGameplayState();
+        if (!gameplay_state_probe.active ||
+            !(state == gameplay_state_probe.last))
+        {
+            gameplay_state_probe.active = true;
+            gameplay_state_probe.last   = state;
+            REXLOG_INFO(
+                "QoL state probe: frame={} frontend_root={:08X} "
+                "frontend_state={:08X} frontend_key={:08X} gameplay_active={} "
+                "active_player={:08X} human_mask={:08X} turn_owner_known={} "
+                "human_turn={} interface_gate={:08X} interface_update={} "
+                "api_available={}",
+                gameplay_state_probe.frames,
+                state.frontend_root,
+                state.frontend_state,
+                state.frontend_key,
+                state.gameplay_active,
+                state.active_player,
+                state.human_player_mask,
+                state.turn_owner_known,
+                state.human_turn,
+                state.interface_gate,
+                state.interface_update,
+                state.api_available);
+        }
+    }
 }
 
 void ReRevvedCompatNullOptionalDispatch(PPCRegister& r0, PPCRegister& r3)
