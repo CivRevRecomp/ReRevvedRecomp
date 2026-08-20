@@ -172,6 +172,11 @@ EXPECTED_HOOKS = [
         "name": "ReRevvedApplyCombatPaceOverride",
     },
     {
+        "address": 0x82CF0CB0,
+        "name": "ReRevvedProbeCivilizationBonusLookup",
+        "registers": ["r3", "r4", "r5"],
+    },
+    {
         "address": 0x82CE2938,
         "name": "ReRevvedProbeRushCostDisplay",
         "registers": ["r27", "r29", "r30", "r31", "r6", "r7", "r11"],
@@ -491,6 +496,23 @@ class HookContractTests(unittest.TestCase):
         ]
         for placement in placements:
             self.assertEqual(generated.count(placement), 1)
+
+    def test_generated_civilization_bonus_probe_placement_when_available(
+        self,
+    ) -> None:
+        paths = sorted(GENERATED.glob("rerevved_recomp.*.cpp"))
+        if not paths:
+            self.skipTest("generated sources are not available")
+
+        generated = "".join(path.read_text(encoding="utf-8") for path in paths)
+        expected = (
+            "DEFINE_REX_FUNC(sub_82CF0CB0) {\n"
+            "\tREX_FUNC_PROLOGUE();\n"
+            "\t// lis r11,-32009\n"
+            "\tReRevvedProbeCivilizationBonusLookup(ctx.r3, ctx.r4, ctx.r5);\n"
+            "\tctx.r11.s64 = -2097741824;"
+        )
+        self.assertEqual(generated.count(expected), 1)
 
     def test_generated_vector_glyph_cache_hook_when_available(self) -> None:
         paths = sorted(GENERATED.glob("rerevved_recomp.*.cpp"))

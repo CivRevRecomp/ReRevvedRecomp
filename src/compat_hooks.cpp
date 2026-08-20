@@ -26,6 +26,8 @@ REXCVAR_DEFINE_BOOL(qol_probe_unit_movement, false, "ReRevved/Diagnostics", "Log
     .debug_only();
 REXCVAR_DEFINE_BOOL(qol_probe_combat, false, "ReRevved/Diagnostics", "Log bounded combat resolution and presentation edges")
     .debug_only();
+REXCVAR_DEFINE_BOOL(qol_probe_civ_bonuses, false, "ReRevved/Diagnostics", "Log bounded civilization bonus table queries")
+    .debug_only();
 REXCVAR_DEFINE_BOOL(qol_probe_rush_cost, false, "ReRevved/Diagnostics", "Log displayed and applied unit rush-cost arithmetic")
     .debug_only();
 REXCVAR_DEFINE_BOOL(qol_fast_combat, false, "ReRevved/QoL", "Use the native 0.5 pace divisor on the mapped combat presentation path")
@@ -263,6 +265,23 @@ struct CombatPaceProbeState
 
 thread_local CombatPaceProbeState combat_pace_probe{};
 
+struct CivilizationBonusPlayerProbeState
+{
+    bool                    valid = false;
+    int32_t                 era   = -1;
+    uint32_t                civ   = UINT32_MAX;
+    uint64_t                seen  = 0;
+    std::array<uint32_t, 4> bonuses{};
+};
+
+struct CivilizationBonusProbeState
+{
+    bool                                             active = false;
+    std::array<CivilizationBonusPlayerProbeState, 6> players{};
+};
+
+thread_local CivilizationBonusProbeState civilization_bonus_probe{};
+
 struct RushCostDisplaySnapshot
 {
     uint32_t city       = UINT32_MAX;
@@ -286,6 +305,29 @@ struct RushCostProbeState
 };
 
 thread_local RushCostProbeState rush_cost_probe{};
+
+bool TryReadCivilizationBonusRow(uint32_t                 civ,
+                                 std::array<uint32_t, 4>& bonuses)
+{
+    constexpr uint32_t kCivilizationBonusTable = 0x82F6F950;
+    constexpr uint32_t kCivilizationCount      = 16;
+    if (civ >= kCivilizationCount)
+    {
+        return false;
+    }
+
+    for (uint32_t era = 0; era < bonuses.size(); ++era)
+    {
+        if (!TryReadGuestU32(
+                kCivilizationBonusTable +
+                    (civ * bonuses.size() + era) * sizeof(uint32_t),
+                bonuses[era]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
 
 bool TryCalculateCorrectedRushCost(int32_t  multiplier,
                                    int32_t  divisor,
@@ -1339,6 +1381,115 @@ void ReRevvedApplyCombatPaceOverride()
             kNativeFast,
             applied);
     }
+}
+
+void ReRevvedProbeCivilizationBonusLookup(PPCRegister& r3,
+                                          PPCRegister& r4,
+                                          PPCRegister& r5)
+{
+    if (!REXCVAR_GET(qol_probe_civ_bonuses))
+    {
+        if (civilization_bonus_probe.active)
+        {
+            civilization_bonus_probe = {};
+        }
+        return;
+    }
+
+    civilization_bonus_probe.active         = true;
+    constexpr uint32_t kPlayerEras          = 0x830ECD08;
+    constexpr uint32_t kPlayerCivilizations = 0x830ECD28;
+    constexpr uint32_t kExcludedBonusPlayer = 0x82F700B0;
+    constexpr int32_t  kPlayerCount         = 6;
+    constexpr int32_t  kBonusCount          = 64;
+    const int32_t      bonus                = r3.s32;
+    const int32_t      player               = r4.s32;
+    const int32_t      exact                = r5.s32;
+    if (player < 0 || player >= kPlayerCount || bonus < 0 ||
+        bonus >= kBonusCount)
+    {
+        return;
+    }
+
+    uint32_t era_word        = 0;
+    uint32_t civ             = UINT32_MAX;
+    uint32_t excluded_player = UINT32_MAX;
+    if (!TryReadGuestU32(
+            kPlayerEras + player * sizeof(uint32_t),
+            era_word) ||
+        !TryReadGuestU32(
+            kPlayerCivilizations + player * sizeof(uint32_t),
+            civ) ||
+        !TryReadGuestU32(kExcludedBonusPlayer, excluded_player))
+    {
+        return;
+    }
+
+    const int32_t era      = static_cast<int32_t>(era_word);
+    auto&         snapshot = civilization_bonus_probe.players[player];
+    if (!snapshot.valid || snapshot.era != era || snapshot.civ != civ)
+    {
+        std::array<uint32_t, 4> bonuses{};
+        if (!TryReadCivilizationBonusRow(civ, bonuses))
+        {
+            return;
+        }
+        snapshot = { true, era, civ, 0, bonuses };
+        REXLOG_INFO(
+            "QoL civilization-bonus probe: state player={} civ={} era={} "
+            "row=[{},{},{},{}] excluded={}",
+            player,
+            civ,
+            era,
+            bonuses[0],
+            bonuses[1],
+            bonuses[2],
+            bonuses[3],
+            excluded_player);
+    }
+
+    const uint64_t seen_bit = UINT64_C(1) << bonus;
+    if ((snapshot.seen & seen_bit) != 0)
+    {
+        return;
+    }
+    snapshot.seen |= seen_bit;
+
+    int32_t active = 0;
+    if (static_cast<uint32_t>(player) != excluded_player)
+    {
+        if (exact != 0)
+        {
+            active = era >= 0 && era < static_cast<int32_t>(snapshot.bonuses.size())
+                         ? snapshot.bonuses[era] == static_cast<uint32_t>(bonus)
+                         : -1;
+        }
+        else
+        {
+            const int32_t last_era = std::clamp(
+                era,
+                0,
+                static_cast<int32_t>(snapshot.bonuses.size()) - 1);
+            for (int32_t index = 0; index <= last_era; ++index)
+            {
+                if (snapshot.bonuses[index] == static_cast<uint32_t>(bonus))
+                {
+                    active = 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    REXLOG_INFO(
+        "QoL civilization-bonus probe: query player={} civ={} era={} "
+        "bonus={} exact={} active={}",
+        player,
+        civ,
+        era,
+        bonus,
+        exact,
+        active);
 }
 
 void ReRevvedProbeRushCostDisplay(PPCRegister& r27,

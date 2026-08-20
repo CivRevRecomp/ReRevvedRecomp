@@ -173,6 +173,15 @@ name = "ReRevvedProbeCombatObjectScaleSet"
 address = 0x82D7F934
 name = "ReRevvedApplyCombatPaceOverride"
 
+# The shared civilization-bonus lookup reads one immutable four-era row for the
+# current player's civilization. This entry probe records bounded query inputs
+# and independently reads the selected row without changing guest state.
+
+[[midasm_hook]]
+address = 0x82CF0CB0
+name = "ReRevvedProbeCivilizationBonusLookup"
+registers = ["r3", "r4", "r5"]
+
 # The unit branch of the central rush-cost routine computes the displayed and
 # submitted cost at 0x82CE2934. The Rush command consumer later converts that
 # submitted gold amount back into production before storing both production and
