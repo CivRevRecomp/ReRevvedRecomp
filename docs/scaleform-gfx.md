@@ -30,6 +30,53 @@ Keep the fallback at the open boundary so the guest's deferred loader and
 movie registration remain authoritative. A missing font library can look like
 a renderer defect because `SetText` may produce no tessellated glyph geometry.
 
+## Vector-glyph cache
+
+GFx defaults its vector-glyph cache to 512 entries. When the cache reaches that
+limit while its oldest entry is still in use, the guest returns a null glyph.
+This appears as an isolated missing letter that returns on a later redraw.
+
+`ReRevvedCompatExpandGfxVectorGlyphCache` runs after GFx creates the cache and
+changes only that default limit from 512 to 1024. It leaves any non-default
+configuration untouched. A sustained text-heavy run confirmed the repair.
+
+## Removed GFx trace hooks
+
+The removed GFx trace hooks were observational only. They did not write guest
+memory, change a `PPCRegister`, or alter guest control flow. Their only side
+effect was host timing, so they are not compatibility repairs and must remain
+removed.
+
+| Removed hook | Verdict | Reason |
+|---|---|---|
+| `ReRevvedTraceGfxObjectIconsBuilderDirect` | Diagnostic only | Environment-gated logging and guest reads only. |
+| `ReRevvedTraceGfxObjectIconsBuilderAlternate` | Diagnostic only | Environment-gated logging and guest reads only. |
+| `ReRevvedTraceGfxObjectIconsNtCreateFileContext` | Diagnostic only | Captured private trace state only. |
+| `ReRevvedTraceGfxObjectIconsNtCreateFileContext143B0` | Diagnostic only | Captured private trace state only. |
+| `ReRevvedTraceGfxObjectIconsNtCreateFileContext1A694` | Diagnostic only | Captured private trace state only. |
+| `ReRevvedTraceGfxObjectIconsNtCreateFileContext229F4` | Diagnostic only | Captured private trace state only. |
+| `ReRevvedTraceGfxObjectIconsNtCreateFileContext22B50` | Diagnostic only | Captured private trace state only. |
+| `ReRevvedTraceGfxObjectIconsNtCreateFileContext22C44` | Diagnostic only | Captured private trace state only. |
+| `ReRevvedTraceGfxObjectIconsNtCreateFileContext23794` | Diagnostic only | Captured private trace state only. |
+| `ReRevvedTraceGfxObjectIconsNtOpenFileContext25510` | Diagnostic only | Captured private trace state only. |
+| `ReRevvedTraceGfxObjectIconsNtOpenFileContext0F2F4` | Diagnostic only | Captured private trace state only. |
+| `ReRevvedTraceGfxObjectIconsNtOpenFileContext14890` | Diagnostic only | Captured private trace state only. |
+| `ReRevvedTraceGfxObjectIconsNtOpenFileContext1B0AC` | Diagnostic only | Captured private trace state only. |
+| `ReRevvedTraceGfxObjectIconsNtOpenFileContext1B66C` | Diagnostic only | Captured private trace state only. |
+| `ReRevvedTraceGfxObjectIconsNtOpenFileContext22F34` | Diagnostic only | Captured private trace state only. |
+| `ReRevvedTraceGfxImageShapeRegister` | Diagnostic only | Updated private atomic registration records only. |
+| `ReRevvedTraceGfxImageShapeDisplayBegin` | Diagnostic only | Updated private trace state and read guest state only. |
+| `ReRevvedTraceGfxImageShapeCoupledBuild` | Diagnostic only | Counted calls and sampled guest state only. |
+| `ReRevvedTraceGfxImageShapeSimpleWriter` | Diagnostic only | Incremented a private trace counter only. |
+| `ReRevvedTraceGfxImageShapeComplexWriter` | Diagnostic only | Incremented a private trace counter only. |
+| `ReRevvedTraceGfxImageShapeResourceResult` | Diagnostic only | Counted results and sampled guest state only. |
+| `ReRevvedTraceGfxImageShapeFillDispatch` | Diagnostic only | Recorded registers in private trace state only. |
+| `ReRevvedTraceGfxImageShapeDraw` | Diagnostic only | Recorded draw counts in private trace state only. |
+| `ReRevvedTraceGfxImageShapeDisplayEnd` | Diagnostic only | Read and logged accumulated diagnostic state only. |
+
+`rerevved_functions.toml` had no uncertain trace-only entries during the
+audit.
+
 ## Input
 
 Input must flow through ReXGlue's runtime input path, the game's action
