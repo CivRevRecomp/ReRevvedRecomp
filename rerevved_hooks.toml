@@ -89,6 +89,63 @@ name = "ReRevvedProbeUnitMovePresentationEnd"
 address = 0x82CE16AC
 name = "ReRevvedProbeUnitMoveApplyEnd"
 
+# Command 0 is the Combat command. These default-off hooks capture only the
+# selected attacker and defender records around the native presentation wait.
+
+[[midasm_hook]]
+address = 0x82CDF74C
+name = "ReRevvedProbeCombatApplyBegin"
+registers = ["r31", "r15", "r29"]
+
+[[midasm_hook]]
+address = 0x82CD9970
+name = "ReRevvedProbeCombatResolveBegin"
+registers = ["r3", "r4", "r5", "r6", "r7"]
+
+[[midasm_hook]]
+address = 0x82CD9C08
+name = "ReRevvedProbeCombatParticipants"
+registers = ["r1"]
+
+[[midasm_hook]]
+address = 0x82CDCB34
+name = "ReRevvedProbeCombatAuxPresentation"
+registers = ["r3", "r4", "r1"]
+
+[[midasm_hook]]
+address = 0x82CDCDB8
+name = "ReRevvedProbeCombatAuxPresentation"
+registers = ["r3", "r4", "r1"]
+
+[[midasm_hook]]
+address = 0x82CDCEB4
+name = "ReRevvedProbeCombatAuxPresentation"
+registers = ["r3", "r4", "r1"]
+
+[[midasm_hook]]
+address = 0x82CDD1A4
+name = "ReRevvedProbeCombatAuxPresentation"
+registers = ["r3", "r4", "r1"]
+
+[[midasm_hook]]
+address = 0x82CDD930
+name = "ReRevvedProbeCombatPresentationBegin"
+registers = ["ctr", "r1"]
+
+[[midasm_hook]]
+address = 0x82CDD958
+name = "ReRevvedProbeCombatPresentationPoll"
+
+[[midasm_hook]]
+address = 0x82CDD978
+name = "ReRevvedProbeCombatPresentationEnd"
+registers = ["r1"]
+
+[[midasm_hook]]
+address = 0x82CDDEF8
+name = "ReRevvedProbeCombatResolveEnd"
+registers = ["r1"]
+
 # Ring-buffer initialization brackets the guest reset. Pause the host GPU while
 # the guest resets the ring, then resume it before the next instruction.
 

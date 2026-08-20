@@ -22,6 +22,8 @@ REXCVAR_DEFINE_BOOL(qol_probe_gameplay_state, false, "ReRevved/Diagnostics", "Lo
     .debug_only();
 REXCVAR_DEFINE_BOOL(qol_probe_unit_movement, false, "ReRevved/Diagnostics", "Log bounded unit-move command and simulation edges")
     .debug_only();
+REXCVAR_DEFINE_BOOL(qol_probe_combat, false, "ReRevved/Diagnostics", "Log bounded combat resolution and presentation edges")
+    .debug_only();
 
 namespace
 {
@@ -199,6 +201,39 @@ struct UnitMoveApplyProbeState
 thread_local UnitMoveApplyProbeState unit_move_apply_probe{};
 std::atomic_uint64_t                 unit_move_submit_sequence = 0;
 
+struct CombatRecordPairSnapshot
+{
+    bool                    attacker_valid = false;
+    bool                    defender_valid = false;
+    std::array<uint8_t, 84> attacker{};
+    std::array<uint8_t, 84> defender{};
+};
+
+struct CombatProbeState
+{
+    bool                                  active                  = false;
+    bool                                  participants_valid      = false;
+    bool                                  presentation_active     = false;
+    uint64_t                              sequence                = 0;
+    uint64_t                              resolve_calls           = 0;
+    uint64_t                              presentation_polls      = 0;
+    uint32_t                              attacker_player         = UINT32_MAX;
+    uint32_t                              attacker_unit           = UINT32_MAX;
+    uint32_t                              defender_player         = UINT32_MAX;
+    uint32_t                              defender_unit           = UINT32_MAX;
+    uint32_t                              attacker_record_address = 0;
+    uint32_t                              defender_record_address = 0;
+    uint32_t                              presentation_target     = 0;
+    CombatRecordPairSnapshot              participant_snapshot{};
+    CombatRecordPairSnapshot              presentation_snapshot{};
+    CombatRecordPairSnapshot              completion_snapshot{};
+    std::chrono::steady_clock::time_point begin;
+    std::chrono::steady_clock::time_point presentation_begin;
+};
+
+thread_local CombatProbeState combat_probe{};
+std::atomic_uint64_t          combat_sequence = 0;
+
 bool CaptureUnitRecord(uint32_t address, std::array<uint8_t, 84>& snapshot)
 {
     if (!IsGuestReadableRange(address, snapshot.size()))
@@ -209,6 +244,103 @@ bool CaptureUnitRecord(uint32_t address, std::array<uint8_t, 84>& snapshot)
     const auto* memory = REX_KERNEL_MEMORY();
     const auto* source = memory->TranslateVirtual<const uint8_t*>(address);
     std::copy_n(source, snapshot.size(), snapshot.begin());
+    return true;
+}
+
+uint32_t UnitRecordAddress(uint32_t player, uint32_t unit)
+{
+    constexpr uint32_t kUnitTable = 0x830F2BF0;
+    constexpr uint32_t kUnitSize  = 84;
+    return kUnitTable + ((player << 8) + unit) * kUnitSize;
+}
+
+CombatRecordPairSnapshot CaptureCombatRecordPair()
+{
+    CombatRecordPairSnapshot snapshot{};
+    snapshot.attacker_valid = CaptureUnitRecord(
+        combat_probe.attacker_record_address,
+        snapshot.attacker);
+    snapshot.defender_valid = CaptureUnitRecord(
+        combat_probe.defender_record_address,
+        snapshot.defender);
+    return snapshot;
+}
+
+void LogCombatRecordDiff(const char*                    phase,
+                         const char*                    role,
+                         const std::array<uint8_t, 84>& before,
+                         const std::array<uint8_t, 84>& after)
+{
+    bool changed = false;
+    for (size_t offset = 0; offset < before.size(); offset += 2)
+    {
+        const uint16_t before_value =
+            (uint16_t{ before[offset] } << 8) | before[offset + 1];
+        const uint16_t after_value =
+            (uint16_t{ after[offset] } << 8) | after[offset + 1];
+        if (before_value != after_value)
+        {
+            changed = true;
+            REXLOG_INFO(
+                "QoL combat probe: record-diff={} phase={} role={} "
+                "offset={:02X} before={:04X} after={:04X}",
+                combat_probe.sequence,
+                phase,
+                role,
+                offset,
+                before_value,
+                after_value);
+        }
+    }
+    if (!changed)
+    {
+        REXLOG_INFO(
+            "QoL combat probe: record-diff={} phase={} role={} unchanged",
+            combat_probe.sequence,
+            phase,
+            role);
+    }
+}
+
+void LogCombatPairDiff(const char*                     phase,
+                       const CombatRecordPairSnapshot& before,
+                       const CombatRecordPairSnapshot& after)
+{
+    if (before.attacker_valid && after.attacker_valid)
+    {
+        LogCombatRecordDiff(phase, "attacker", before.attacker, after.attacker);
+    }
+    if (before.defender_valid && after.defender_valid)
+    {
+        LogCombatRecordDiff(phase, "defender", before.defender, after.defender);
+    }
+}
+
+bool ResolveCombatParticipants(uint32_t stack_pointer)
+{
+    uint32_t attacker_player = 0;
+    uint32_t attacker_unit   = 0;
+    uint32_t defender_player = 0;
+    uint32_t defender_unit   = 0;
+    if (!TryReadGuestU32(stack_pointer + 1572, attacker_player) ||
+        !TryReadGuestU32(stack_pointer + 1580, attacker_unit) ||
+        !TryReadGuestU32(stack_pointer + 1596, defender_player) ||
+        !TryReadGuestU32(stack_pointer + 1604, defender_unit) ||
+        attacker_player >= 6 || defender_player >= 6 || attacker_unit >= 256 ||
+        defender_unit >= 256)
+    {
+        return false;
+    }
+
+    combat_probe.attacker_player = attacker_player;
+    combat_probe.attacker_unit   = attacker_unit;
+    combat_probe.defender_player = defender_player;
+    combat_probe.defender_unit   = defender_unit;
+    combat_probe.attacker_record_address =
+        UnitRecordAddress(attacker_player, attacker_unit);
+    combat_probe.defender_record_address =
+        UnitRecordAddress(defender_player, defender_unit);
+    combat_probe.participants_valid = true;
     return true;
 }
 
@@ -713,6 +845,252 @@ void ReRevvedProbeUnitMovePresentationEnd()
         elapsed_ms,
         wait_ms);
     unit_move_apply_probe.presentation_active = false;
+}
+
+void ReRevvedProbeCombatApplyBegin(PPCRegister& r31,
+                                   PPCRegister& r15,
+                                   PPCRegister& r29)
+{
+    if (!REXCVAR_GET(qol_probe_combat))
+    {
+        combat_probe = {};
+        return;
+    }
+    if (combat_probe.active)
+    {
+        return;
+    }
+
+    combat_probe        = {};
+    combat_probe.active = true;
+    combat_probe.sequence =
+        combat_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
+    combat_probe.begin = std::chrono::steady_clock::now();
+    REXLOG_INFO(
+        "QoL combat probe: apply-begin={} player={} unit={} move_dir={} "
+        "thread={:016X}",
+        combat_probe.sequence,
+        r31.u32,
+        r15.u32,
+        r29.u32,
+        CurrentThreadToken());
+}
+
+void ReRevvedProbeCombatResolveBegin(PPCRegister& r3,
+                                     PPCRegister& r4,
+                                     PPCRegister& r5,
+                                     PPCRegister& r6,
+                                     PPCRegister& r7)
+{
+    if (!REXCVAR_GET(qol_probe_combat))
+    {
+        combat_probe = {};
+        return;
+    }
+    if (!combat_probe.active)
+    {
+        combat_probe.active = true;
+        combat_probe.sequence =
+            combat_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
+        combat_probe.begin = std::chrono::steady_clock::now();
+    }
+    ++combat_probe.resolve_calls;
+    if (combat_probe.resolve_calls != 1)
+    {
+        return;
+    }
+
+    REXLOG_INFO(
+        "QoL combat probe: resolve-begin={} player={} unit={} "
+        "mode={:08X} defender={:08X}/{:08X} thread={:016X}",
+        combat_probe.sequence,
+        r3.u32,
+        r4.u32,
+        r5.u32,
+        r6.u32,
+        r7.u32,
+        CurrentThreadToken());
+}
+
+void ReRevvedProbeCombatParticipants(PPCRegister& r1)
+{
+    if (!REXCVAR_GET(qol_probe_combat) || !combat_probe.active)
+    {
+        return;
+    }
+    if (combat_probe.participants_valid)
+    {
+        return;
+    }
+
+    if (!ResolveCombatParticipants(r1.u32))
+    {
+        REXLOG_INFO(
+            "QoL combat probe: participants={} unavailable stack={:08X}",
+            combat_probe.sequence,
+            r1.u32);
+        return;
+    }
+
+    combat_probe.participant_snapshot = CaptureCombatRecordPair();
+    REXLOG_INFO(
+        "QoL combat probe: participants={} attacker={}/{} record={:08X} "
+        "valid={} defender={}/{} record={:08X} valid={} thread={:016X}",
+        combat_probe.sequence,
+        combat_probe.attacker_player,
+        combat_probe.attacker_unit,
+        combat_probe.attacker_record_address,
+        combat_probe.participant_snapshot.attacker_valid,
+        combat_probe.defender_player,
+        combat_probe.defender_unit,
+        combat_probe.defender_record_address,
+        combat_probe.participant_snapshot.defender_valid,
+        CurrentThreadToken());
+}
+
+void ReRevvedProbeCombatAuxPresentation(PPCRegister& r3,
+                                        PPCRegister& r4,
+                                        PPCRegister& r1)
+{
+    if (!REXCVAR_GET(qol_probe_combat) || !combat_probe.active)
+    {
+        return;
+    }
+
+    if (!combat_probe.participants_valid)
+    {
+        ResolveCombatParticipants(r1.u32);
+    }
+    const CombatRecordPairSnapshot snapshot = CaptureCombatRecordPair();
+    if (combat_probe.participants_valid)
+    {
+        LogCombatPairDiff(
+            "participants-to-aux-presentation",
+            combat_probe.participant_snapshot,
+            snapshot);
+    }
+    REXLOG_INFO(
+        "QoL combat probe: aux-presentation={} kind={:08X} wait={:08X} "
+        "thread={:016X}",
+        combat_probe.sequence,
+        r3.u32,
+        r4.u32,
+        CurrentThreadToken());
+}
+
+void ReRevvedProbeCombatPresentationBegin(PPCRegister& ctr, PPCRegister& r1)
+{
+    if (!REXCVAR_GET(qol_probe_combat) || !combat_probe.active)
+    {
+        return;
+    }
+
+    if (!combat_probe.participants_valid)
+    {
+        ResolveCombatParticipants(r1.u32);
+    }
+    combat_probe.presentation_snapshot = CaptureCombatRecordPair();
+    if (combat_probe.participants_valid)
+    {
+        LogCombatPairDiff(
+            "participants-to-presentation",
+            combat_probe.participant_snapshot,
+            combat_probe.presentation_snapshot);
+    }
+    combat_probe.presentation_active = true;
+    combat_probe.presentation_target = ctr.u32;
+    combat_probe.presentation_polls  = 0;
+    combat_probe.presentation_begin  = std::chrono::steady_clock::now();
+    REXLOG_INFO(
+        "QoL combat probe: presentation-begin={} target={:08X} "
+        "thread={:016X}",
+        combat_probe.sequence,
+        combat_probe.presentation_target,
+        CurrentThreadToken());
+}
+
+void ReRevvedProbeCombatPresentationPoll()
+{
+    if (!REXCVAR_GET(qol_probe_combat) ||
+        !combat_probe.presentation_active)
+    {
+        return;
+    }
+    ++combat_probe.presentation_polls;
+}
+
+void ReRevvedProbeCombatPresentationEnd(PPCRegister& r1)
+{
+    if (!REXCVAR_GET(qol_probe_combat) ||
+        !combat_probe.presentation_active)
+    {
+        return;
+    }
+
+    if (!combat_probe.participants_valid)
+    {
+        ResolveCombatParticipants(r1.u32);
+    }
+    combat_probe.completion_snapshot = CaptureCombatRecordPair();
+    LogCombatPairDiff(
+        "during-presentation",
+        combat_probe.presentation_snapshot,
+        combat_probe.completion_snapshot);
+    const double elapsed_ms =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - combat_probe.presentation_begin)
+            .count();
+    REXLOG_INFO(
+        "QoL combat probe: presentation-end={} target={:08X} polls={} "
+        "resolve-calls={} elapsed={:.3f}ms thread={:016X}",
+        combat_probe.sequence,
+        combat_probe.presentation_target,
+        combat_probe.presentation_polls,
+        combat_probe.resolve_calls,
+        elapsed_ms,
+        CurrentThreadToken());
+    combat_probe.presentation_active = false;
+}
+
+void ReRevvedProbeCombatResolveEnd(PPCRegister& r1)
+{
+    if (!REXCVAR_GET(qol_probe_combat) || !combat_probe.active)
+    {
+        return;
+    }
+
+    if (!combat_probe.participants_valid)
+    {
+        ResolveCombatParticipants(r1.u32);
+    }
+    const CombatRecordPairSnapshot final_snapshot = CaptureCombatRecordPair();
+    if (combat_probe.completion_snapshot.attacker_valid ||
+        combat_probe.completion_snapshot.defender_valid)
+    {
+        LogCombatPairDiff(
+            "completion-to-resolve-end",
+            combat_probe.completion_snapshot,
+            final_snapshot);
+    }
+    else
+    {
+        LogCombatPairDiff(
+            "participants-to-resolve-end",
+            combat_probe.participant_snapshot,
+            final_snapshot);
+    }
+    const double elapsed_ms =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - combat_probe.begin)
+            .count();
+    REXLOG_INFO(
+        "QoL combat probe: resolve-end={} resolve-calls={} elapsed={:.3f}ms "
+        "thread={:016X}",
+        combat_probe.sequence,
+        combat_probe.resolve_calls,
+        elapsed_ms,
+        CurrentThreadToken());
+    combat_probe = {};
 }
 
 void ReRevvedCompatNullOptionalDispatch(PPCRegister& r0, PPCRegister& r3)

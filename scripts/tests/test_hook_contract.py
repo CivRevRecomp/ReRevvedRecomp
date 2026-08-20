@@ -96,6 +96,60 @@ EXPECTED_HOOKS = [
         "name": "ReRevvedProbeUnitMoveApplyEnd",
     },
     {
+        "address": 0x82CDF74C,
+        "name": "ReRevvedProbeCombatApplyBegin",
+        "registers": ["r31", "r15", "r29"],
+    },
+    {
+        "address": 0x82CD9970,
+        "name": "ReRevvedProbeCombatResolveBegin",
+        "registers": ["r3", "r4", "r5", "r6", "r7"],
+    },
+    {
+        "address": 0x82CD9C08,
+        "name": "ReRevvedProbeCombatParticipants",
+        "registers": ["r1"],
+    },
+    {
+        "address": 0x82CDCB34,
+        "name": "ReRevvedProbeCombatAuxPresentation",
+        "registers": ["r3", "r4", "r1"],
+    },
+    {
+        "address": 0x82CDCDB8,
+        "name": "ReRevvedProbeCombatAuxPresentation",
+        "registers": ["r3", "r4", "r1"],
+    },
+    {
+        "address": 0x82CDCEB4,
+        "name": "ReRevvedProbeCombatAuxPresentation",
+        "registers": ["r3", "r4", "r1"],
+    },
+    {
+        "address": 0x82CDD1A4,
+        "name": "ReRevvedProbeCombatAuxPresentation",
+        "registers": ["r3", "r4", "r1"],
+    },
+    {
+        "address": 0x82CDD930,
+        "name": "ReRevvedProbeCombatPresentationBegin",
+        "registers": ["ctr", "r1"],
+    },
+    {
+        "address": 0x82CDD958,
+        "name": "ReRevvedProbeCombatPresentationPoll",
+    },
+    {
+        "address": 0x82CDD978,
+        "name": "ReRevvedProbeCombatPresentationEnd",
+        "registers": ["r1"],
+    },
+    {
+        "address": 0x82CDDEF8,
+        "name": "ReRevvedProbeCombatResolveEnd",
+        "registers": ["r1"],
+    },
+    {
         "address": 0x8269CAE0,
         "name": "ReRevvedCompatRingInitializeBegin",
         "registers": ["r3", "r4"],
@@ -278,6 +332,75 @@ class HookContractTests(unittest.TestCase):
             ),
         ]
         for placement in ordinary:
+            self.assertEqual(generated.count(placement), 1)
+
+    def test_generated_combat_probe_placement_when_available(self) -> None:
+        paths = sorted(GENERATED.glob("rerevved_recomp.*.cpp"))
+        if not paths:
+            self.skipTest("generated sources are not available")
+
+        generated = "".join(path.read_text(encoding="utf-8") for path in paths)
+        placements = [
+            (
+                "loc_82CDF74C:\n"
+                "\t// lis r11,-31985\n"
+                "\tReRevvedProbeCombatApplyBegin(ctx.r31, ctx.r15, ctx.r29);"
+            ),
+            (
+                "DEFINE_REX_FUNC(sub_82CD9970) {\n"
+                "\tREX_FUNC_PROLOGUE();\n"
+                "\tPPCRegister temp{};\n"
+                "\tuint32_t ea{};\n"
+                "\t// mflr r12\n"
+                "\tReRevvedProbeCombatResolveBegin(ctx.r3, ctx.r4, ctx.r5, ctx.r6, ctx.r7);"
+            ),
+            (
+                "loc_82CD9C08:\n"
+                "\t// cmpwi cr6,r26,-1\n"
+                "\tReRevvedProbeCombatParticipants(ctx.r1);"
+            ),
+            (
+                "\t// bl 0x82d11ad8\n"
+                "\tReRevvedProbeCombatAuxPresentation(ctx.r3, ctx.r4, ctx.r1);\n"
+                "\tctx.lr = 0x82CDCB38;"
+            ),
+            (
+                "\t// bl 0x82d11ad8\n"
+                "\tReRevvedProbeCombatAuxPresentation(ctx.r3, ctx.r4, ctx.r1);\n"
+                "\tctx.lr = 0x82CDCDBC;"
+            ),
+            (
+                "\t// bl 0x82d11ad8\n"
+                "\tReRevvedProbeCombatAuxPresentation(ctx.r3, ctx.r4, ctx.r1);\n"
+                "\tctx.lr = 0x82CDCEB8;"
+            ),
+            (
+                "\t// bl 0x82d11ad8\n"
+                "\tReRevvedProbeCombatAuxPresentation(ctx.r3, ctx.r4, ctx.r1);\n"
+                "\tctx.lr = 0x82CDD1A8;"
+            ),
+            (
+                "\t// bctrl \n"
+                "\tReRevvedProbeCombatPresentationBegin(ctx.ctr, ctx.r1);\n"
+                "\tctx.lr = 0x82CDD934;"
+            ),
+            (
+                "loc_82CDD958:\n"
+                "\t// li r5,1\n"
+                "\tReRevvedProbeCombatPresentationPoll();"
+            ),
+            (
+                "loc_82CDD978:\n"
+                "\t// lwzx r10,r16,r30\n"
+                "\tReRevvedProbeCombatPresentationEnd(ctx.r1);"
+            ),
+            (
+                "loc_82CDDEF8:\n"
+                "\t// li r3,0\n"
+                "\tReRevvedProbeCombatResolveEnd(ctx.r1);"
+            ),
+        ]
+        for placement in placements:
             self.assertEqual(generated.count(placement), 1)
 
     def test_generated_vector_glyph_cache_hook_when_available(self) -> None:
