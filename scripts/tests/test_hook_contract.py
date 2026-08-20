@@ -21,6 +21,81 @@ EXPECTED_HOOKS = [
         "name": "ReRevvedProbeGameplayFrame",
     },
     {
+        "address": 0x82CE1950,
+        "name": "ReRevvedProbeUnitMoveSubmit",
+        "registers": ["r3", "r4", "r5", "r6", "r7", "r8"],
+    },
+    {
+        "address": 0x82CDEDFC,
+        "name": "ReRevvedProbeUnitMoveApplyBegin",
+        "registers": ["r31", "r15", "r29"],
+    },
+    {
+        "address": 0x82CDEE84,
+        "name": "ReRevvedProbeUnitMoveMapUpdateBegin",
+    },
+    {
+        "address": 0x82CDEE88,
+        "name": "ReRevvedProbeUnitMoveMapUpdateEnd",
+    },
+    {
+        "address": 0x82CDF134,
+        "name": "ReRevvedProbeUnitMovePresentationBegin",
+        "registers": ["ctr"],
+    },
+    {
+        "address": 0x82CDF138,
+        "name": "ReRevvedProbeUnitMovePresentationReturned",
+        "registers": ["r3"],
+    },
+    {
+        "address": 0x82CDF164,
+        "name": "ReRevvedProbeUnitMovePresentationPoll",
+    },
+    {
+        "address": 0x82CDF184,
+        "name": "ReRevvedProbeUnitMovePresentationEnd",
+    },
+    {
+        "address": 0x82CDF324,
+        "name": "ReRevvedProbeUnitMovePresentationBegin",
+        "registers": ["ctr"],
+    },
+    {
+        "address": 0x82CDF328,
+        "name": "ReRevvedProbeUnitMovePresentationReturned",
+        "registers": ["r3"],
+    },
+    {
+        "address": 0x82CDF340,
+        "name": "ReRevvedProbeUnitMovePresentationPoll",
+    },
+    {
+        "address": 0x82CDF36C,
+        "name": "ReRevvedProbeUnitMovePresentationEnd",
+    },
+    {
+        "address": 0x82CD7580,
+        "name": "ReRevvedProbeUnitMoveDurationSet",
+        "registers": ["r11"],
+    },
+    {
+        "address": 0x82CD758C,
+        "name": "ReRevvedProbeUnitMoveAnimationBegin",
+    },
+    {
+        "address": 0x82CD7590,
+        "name": "ReRevvedProbeUnitMovePresentationPoll",
+    },
+    {
+        "address": 0x82CD75C4,
+        "name": "ReRevvedProbeUnitMovePresentationEnd",
+    },
+    {
+        "address": 0x82CE16AC,
+        "name": "ReRevvedProbeUnitMoveApplyEnd",
+    },
+    {
         "address": 0x8269CAE0,
         "name": "ReRevvedCompatRingInitializeBegin",
         "registers": ["r3", "r4"],
@@ -107,6 +182,102 @@ class HookContractTests(unittest.TestCase):
                 "\t// mflr r12\n"
                 f"\t{hook}"
             )
+            self.assertEqual(generated.count(placement), 1)
+
+    def test_generated_movement_probe_placement_when_available(self) -> None:
+        paths = sorted(GENERATED.glob("rerevved_recomp.*.cpp"))
+        if not paths:
+            self.skipTest("generated sources are not available")
+
+        generated = "".join(path.read_text(encoding="utf-8") for path in paths)
+        expected = {
+            "DEFINE_REX_FUNC(sub_82CE1950) {\n": (
+                "\tREX_FUNC_PROLOGUE();\n"
+                "\tuint32_t ea{};\n"
+                "\t// mflr r12\n"
+                "\tReRevvedProbeUnitMoveSubmit(ctx.r3, ctx.r4, ctx.r5, ctx.r6, ctx.r7, ctx.r8);"
+            ),
+            "loc_82CDEDFC:\n": (
+                "\t// lis r11,-31985\n"
+                "\tReRevvedProbeUnitMoveApplyBegin(ctx.r31, ctx.r15, ctx.r29);"
+            ),
+            "\t// bl 0x82d076d8\n": (
+                "\tReRevvedProbeUnitMoveMapUpdateBegin();\n"
+                "\tctx.lr = 0x82CDEE88;"
+            ),
+            "\t// lis r10,-31979\n": (
+                "\tReRevvedProbeUnitMoveMapUpdateEnd();\n"
+                "\tctx.r10.s64 = -2095775744;"
+            ),
+            "\t// bctrl \n": (
+                "\tReRevvedProbeUnitMovePresentationBegin(ctx.ctr);\n"
+                "\tctx.lr = 0x82CDF138;"
+            ),
+            "\t// mr r24,r3\n": (
+                "\tReRevvedProbeUnitMovePresentationReturned(ctx.r3);"
+            ),
+            "loc_82CDF164:\n": (
+                "\t// li r5,1\n"
+                "\tReRevvedProbeUnitMovePresentationPoll();"
+            ),
+            "loc_82CDF184:\n": (
+                "\t// rlwinm r11,r11,0,24,22\n"
+                "\tReRevvedProbeUnitMovePresentationEnd();"
+            ),
+            "loc_82CE16AC:\n": (
+                "\t// lis r10,-31979\n"
+                "\tReRevvedProbeUnitMoveApplyEnd();"
+            ),
+        }
+        for anchor, placement in expected.items():
+            self.assertEqual(generated.count(anchor + placement), 1)
+
+        alternate = [
+            (
+                "\t// bctrl \n"
+                "\tReRevvedProbeUnitMovePresentationBegin(ctx.ctr);\n"
+                "\tctx.lr = 0x82CDF328;"
+            ),
+            (
+                "\t// lwz r11,-6204(r31)\n"
+                "\tReRevvedProbeUnitMovePresentationReturned(ctx.r3);"
+            ),
+            (
+                "loc_82CDF340:\n"
+                "\t// li r5,1\n"
+                "\tReRevvedProbeUnitMovePresentationPoll();"
+            ),
+            (
+                "loc_82CDF36C:\n"
+                "\t// lwz r11,0(r30)\n"
+                "\tReRevvedProbeUnitMovePresentationEnd();"
+            ),
+        ]
+        for placement in alternate:
+            self.assertEqual(generated.count(placement), 1)
+
+        ordinary = [
+            (
+                "\t// stw r11,17736(r10)\n"
+                "\tReRevvedProbeUnitMoveDurationSet(ctx.r11);"
+            ),
+            (
+                "\t// bl 0x82d11ad8\n"
+                "\tReRevvedProbeUnitMoveAnimationBegin();\n"
+                "\tctx.lr = 0x82CD7590;"
+            ),
+            (
+                "loc_82CD7590:\n"
+                "\t// lis r11,-32000\n"
+                "\tReRevvedProbeUnitMovePresentationPoll();"
+            ),
+            (
+                "loc_82CD75C4:\n"
+                "\t// addi r11,r22,34\n"
+                "\tReRevvedProbeUnitMovePresentationEnd();"
+            ),
+        ]
+        for placement in ordinary:
             self.assertEqual(generated.count(placement), 1)
 
     def test_generated_vector_glyph_cache_hook_when_available(self) -> None:

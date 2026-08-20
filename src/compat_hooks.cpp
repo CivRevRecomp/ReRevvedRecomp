@@ -1,5 +1,7 @@
 // Hooks preserve title behavior unless documented as a compatibility repair.
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -17,6 +19,8 @@
 REXCVAR_DEFINE_BOOL(qol_probe_gameplay_frame, false, "ReRevved/Diagnostics", "Log the candidate playable-frame cadence and thread")
     .debug_only();
 REXCVAR_DEFINE_BOOL(qol_probe_gameplay_state, false, "ReRevved/Diagnostics", "Log conservative gameplay-state gate transitions")
+    .debug_only();
+REXCVAR_DEFINE_BOOL(qol_probe_unit_movement, false, "ReRevved/Diagnostics", "Log bounded unit-move command and simulation edges")
     .debug_only();
 
 namespace
@@ -171,6 +175,119 @@ struct GameplayStateProbeState
 
 thread_local GameplayStateProbeState gameplay_state_probe{};
 
+struct UnitMoveApplyProbeState
+{
+    bool                                  active                      = false;
+    bool                                  presentation_active         = false;
+    uint64_t                              sequence                    = 0;
+    uint64_t                              presentation_polls          = 0;
+    uint32_t                              presentation_target         = 0;
+    uint32_t                              presentation_result         = 0;
+    uint32_t                              unit_record_address         = 0;
+    bool                                  apply_snapshot_valid        = false;
+    bool                                  presentation_snapshot_valid = false;
+    bool                                  completion_snapshot_valid   = false;
+    std::array<uint8_t, 84>               apply_snapshot{};
+    std::array<uint8_t, 84>               presentation_snapshot{};
+    std::array<uint8_t, 84>               completion_snapshot{};
+    std::chrono::steady_clock::time_point begin;
+    std::chrono::steady_clock::time_point map_update_begin;
+    std::chrono::steady_clock::time_point presentation_begin;
+    std::chrono::steady_clock::time_point presentation_wait_begin;
+};
+
+thread_local UnitMoveApplyProbeState unit_move_apply_probe{};
+std::atomic_uint64_t                 unit_move_submit_sequence = 0;
+
+bool CaptureUnitRecord(uint32_t address, std::array<uint8_t, 84>& snapshot)
+{
+    if (!IsGuestReadableRange(address, snapshot.size()))
+    {
+        return false;
+    }
+
+    const auto* memory = REX_KERNEL_MEMORY();
+    const auto* source = memory->TranslateVirtual<const uint8_t*>(address);
+    std::copy_n(source, snapshot.size(), snapshot.begin());
+    return true;
+}
+
+void LogUnitRecordDiff(uint64_t                       sequence,
+                       const char*                    phase,
+                       const std::array<uint8_t, 84>& before,
+                       const std::array<uint8_t, 84>& after)
+{
+    for (size_t offset = 0; offset < before.size(); offset += 2)
+    {
+        const uint16_t before_value =
+            (uint16_t{ before[offset] } << 8) | before[offset + 1];
+        const uint16_t after_value =
+            (uint16_t{ after[offset] } << 8) | after[offset + 1];
+        if (before_value != after_value)
+        {
+            REXLOG_INFO(
+                "QoL movement probe: unit-diff={} phase={} offset={:02X} "
+                "before={:04X} after={:04X}",
+                sequence,
+                phase,
+                offset,
+                before_value,
+                after_value);
+        }
+    }
+}
+
+uint16_t UnitRecordU16(const std::array<uint8_t, 84>& snapshot, size_t offset)
+{
+    return (uint16_t{ snapshot[offset] } << 8) | snapshot[offset + 1];
+}
+
+uint32_t UnitRecordU32(const std::array<uint8_t, 84>& snapshot, size_t offset)
+{
+    return (uint32_t{ snapshot[offset] } << 24) |
+           (uint32_t{ snapshot[offset + 1] } << 16) |
+           (uint32_t{ snapshot[offset + 2] } << 8) |
+           snapshot[offset + 3];
+}
+
+void LogUnitRecordSnapshot(uint64_t                       sequence,
+                           const char*                    phase,
+                           uint32_t                       address,
+                           bool                           valid,
+                           const std::array<uint8_t, 84>& snapshot)
+{
+    if (!valid)
+    {
+        REXLOG_INFO(
+            "QoL movement probe: unit-state={} phase={} record={:08X} "
+            "unavailable",
+            sequence,
+            phase,
+            address);
+        return;
+    }
+
+    REXLOG_INFO(
+        "QoL movement probe: unit-state={} phase={} record={:08X} "
+        "v02={:04X} flags0C={:08X} v14={:08X} v18={:04X} "
+        "pos={:04X}/{:04X} v20={:04X} dest={:04X}/{:04X} "
+        "v26={:04X} v4E={:04X}",
+        sequence,
+        phase,
+        address,
+        UnitRecordU16(snapshot, 0x02),
+        UnitRecordU32(snapshot, 0x0C),
+        UnitRecordU32(snapshot, 0x14),
+        UnitRecordU16(snapshot, 0x18),
+        UnitRecordU16(snapshot, 0x1C),
+        UnitRecordU16(snapshot, 0x1E),
+        UnitRecordU16(snapshot, 0x20),
+        UnitRecordU16(snapshot, 0x22),
+        UnitRecordU16(snapshot, 0x24),
+        UnitRecordU16(snapshot, 0x26),
+        UnitRecordU16(snapshot, 0x4E));
+}
+
 constexpr uint32_t kInterfaceGateGlobal   = 0x8314F28C;
 constexpr uint32_t kFrontendRootGlobal    = 0x82FFD624;
 constexpr uint32_t kActivePlayerGlobal    = 0x8312B8E8;
@@ -306,6 +423,296 @@ void ReRevvedProbeGameplayFrame()
                 state.api_available);
         }
     }
+}
+
+void ReRevvedProbeUnitMoveSubmit(PPCRegister& r3,
+                                 PPCRegister& r4,
+                                 PPCRegister& r5,
+                                 PPCRegister& r6,
+                                 PPCRegister& r7,
+                                 PPCRegister& r8)
+{
+    constexpr uint32_t kMoveCommand = 0x11;
+    if (!REXCVAR_GET(qol_probe_unit_movement) || r3.u32 != kMoveCommand)
+    {
+        return;
+    }
+
+    const uint64_t sequence =
+        unit_move_submit_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
+    REXLOG_INFO(
+        "QoL movement probe: submit={} player={:08X} unit={:08X} "
+        "target={:08X} aux={:08X}/{:08X} thread={:016X}",
+        sequence,
+        r4.u32,
+        r5.u32,
+        r6.u32,
+        r7.u32,
+        r8.u32,
+        CurrentThreadToken());
+}
+
+void ReRevvedProbeUnitMoveApplyBegin(PPCRegister& r31,
+                                     PPCRegister& r15,
+                                     PPCRegister& r29)
+{
+    if (!REXCVAR_GET(qol_probe_unit_movement))
+    {
+        unit_move_apply_probe = {};
+        return;
+    }
+
+    unit_move_apply_probe.active = true;
+    unit_move_apply_probe.sequence =
+        unit_move_submit_sequence.load(std::memory_order_relaxed);
+    unit_move_apply_probe.begin = std::chrono::steady_clock::now();
+    if (r31.u32 < 6 && r15.u32 < 256)
+    {
+        constexpr uint32_t kUnitTable = 0x830F2BF0;
+        constexpr uint32_t kUnitSize  = 84;
+        const uint32_t     index      = (r31.u32 << 8) + r15.u32;
+        unit_move_apply_probe.unit_record_address =
+            kUnitTable + index * kUnitSize;
+        unit_move_apply_probe.apply_snapshot_valid = CaptureUnitRecord(
+            unit_move_apply_probe.unit_record_address,
+            unit_move_apply_probe.apply_snapshot);
+    }
+    LogUnitRecordSnapshot(
+        unit_move_apply_probe.sequence,
+        "apply-begin",
+        unit_move_apply_probe.unit_record_address,
+        unit_move_apply_probe.apply_snapshot_valid,
+        unit_move_apply_probe.apply_snapshot);
+    REXLOG_INFO(
+        "QoL movement probe: apply-begin={} player={:08X} unit={:08X} "
+        "target={:08X} thread={:016X}",
+        unit_move_apply_probe.sequence,
+        r31.u32,
+        r15.u32,
+        r29.u32,
+        CurrentThreadToken());
+}
+
+void ReRevvedProbeUnitMoveApplyEnd()
+{
+    if (!REXCVAR_GET(qol_probe_unit_movement) ||
+        !unit_move_apply_probe.active)
+    {
+        return;
+    }
+
+    std::array<uint8_t, 84> final_snapshot{};
+    const bool              final_snapshot_valid = CaptureUnitRecord(
+        unit_move_apply_probe.unit_record_address,
+        final_snapshot);
+    if (final_snapshot_valid)
+    {
+        if (unit_move_apply_probe.completion_snapshot_valid)
+        {
+            LogUnitRecordDiff(
+                unit_move_apply_probe.sequence,
+                "completion-to-apply-end",
+                unit_move_apply_probe.completion_snapshot,
+                final_snapshot);
+        }
+        else if (unit_move_apply_probe.apply_snapshot_valid)
+        {
+            LogUnitRecordDiff(
+                unit_move_apply_probe.sequence,
+                "apply-to-end",
+                unit_move_apply_probe.apply_snapshot,
+                final_snapshot);
+        }
+    }
+    LogUnitRecordSnapshot(
+        unit_move_apply_probe.sequence,
+        "apply-end",
+        unit_move_apply_probe.unit_record_address,
+        final_snapshot_valid,
+        final_snapshot);
+
+    const double elapsed_ms =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - unit_move_apply_probe.begin)
+            .count();
+    REXLOG_INFO(
+        "QoL movement probe: apply-end={} elapsed={:.3f}ms thread={:016X}",
+        unit_move_apply_probe.sequence,
+        elapsed_ms,
+        CurrentThreadToken());
+    unit_move_apply_probe = {};
+}
+
+void ReRevvedProbeUnitMoveMapUpdateBegin()
+{
+    if (!REXCVAR_GET(qol_probe_unit_movement) ||
+        !unit_move_apply_probe.active)
+    {
+        return;
+    }
+
+    unit_move_apply_probe.map_update_begin = std::chrono::steady_clock::now();
+}
+
+void ReRevvedProbeUnitMoveMapUpdateEnd()
+{
+    if (!REXCVAR_GET(qol_probe_unit_movement) ||
+        !unit_move_apply_probe.active)
+    {
+        return;
+    }
+
+    const double elapsed_ms =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() -
+            unit_move_apply_probe.map_update_begin)
+            .count();
+    REXLOG_INFO(
+        "QoL movement probe: map-update={} elapsed={:.3f}ms",
+        unit_move_apply_probe.sequence,
+        elapsed_ms);
+}
+
+void ReRevvedProbeUnitMovePresentationBegin(PPCRegister& ctr)
+{
+    if (!REXCVAR_GET(qol_probe_unit_movement) ||
+        !unit_move_apply_probe.active)
+    {
+        return;
+    }
+
+    unit_move_apply_probe.presentation_active = true;
+    unit_move_apply_probe.presentation_target = ctr.u32;
+    unit_move_apply_probe.presentation_begin  = std::chrono::steady_clock::now();
+    REXLOG_INFO(
+        "QoL movement probe: presentation-begin={} target={:08X}",
+        unit_move_apply_probe.sequence,
+        unit_move_apply_probe.presentation_target);
+}
+
+void ReRevvedProbeUnitMoveDurationSet(PPCRegister& r11)
+{
+    if (!REXCVAR_GET(qol_probe_unit_movement) ||
+        !unit_move_apply_probe.active)
+    {
+        return;
+    }
+
+    REXLOG_INFO(
+        "QoL movement probe: duration-set={} value={}ms",
+        unit_move_apply_probe.sequence,
+        r11.u32);
+}
+
+void ReRevvedProbeUnitMoveAnimationBegin()
+{
+    if (!REXCVAR_GET(qol_probe_unit_movement) ||
+        !unit_move_apply_probe.active)
+    {
+        return;
+    }
+
+    unit_move_apply_probe.presentation_active         = true;
+    unit_move_apply_probe.presentation_target         = 0x82D11AD8;
+    unit_move_apply_probe.presentation_begin          = std::chrono::steady_clock::now();
+    unit_move_apply_probe.presentation_snapshot_valid = CaptureUnitRecord(
+        unit_move_apply_probe.unit_record_address,
+        unit_move_apply_probe.presentation_snapshot);
+    if (unit_move_apply_probe.apply_snapshot_valid &&
+        unit_move_apply_probe.presentation_snapshot_valid)
+    {
+        LogUnitRecordDiff(
+            unit_move_apply_probe.sequence,
+            "apply-to-presentation",
+            unit_move_apply_probe.apply_snapshot,
+            unit_move_apply_probe.presentation_snapshot);
+    }
+    LogUnitRecordSnapshot(
+        unit_move_apply_probe.sequence,
+        "presentation-begin",
+        unit_move_apply_probe.unit_record_address,
+        unit_move_apply_probe.presentation_snapshot_valid,
+        unit_move_apply_probe.presentation_snapshot);
+    REXLOG_INFO(
+        "QoL movement probe: presentation-begin={} target={:08X}",
+        unit_move_apply_probe.sequence,
+        unit_move_apply_probe.presentation_target);
+}
+
+void ReRevvedProbeUnitMovePresentationReturned(PPCRegister& r3)
+{
+    if (!REXCVAR_GET(qol_probe_unit_movement) ||
+        !unit_move_apply_probe.presentation_active)
+    {
+        return;
+    }
+
+    unit_move_apply_probe.presentation_result = r3.u32;
+}
+
+void ReRevvedProbeUnitMovePresentationPoll()
+{
+    if (!REXCVAR_GET(qol_probe_unit_movement) ||
+        !unit_move_apply_probe.presentation_active)
+    {
+        return;
+    }
+
+    if (unit_move_apply_probe.presentation_polls == 0)
+    {
+        unit_move_apply_probe.presentation_wait_begin =
+            std::chrono::steady_clock::now();
+    }
+    ++unit_move_apply_probe.presentation_polls;
+}
+
+void ReRevvedProbeUnitMovePresentationEnd()
+{
+    if (!REXCVAR_GET(qol_probe_unit_movement) ||
+        !unit_move_apply_probe.presentation_active)
+    {
+        return;
+    }
+
+    unit_move_apply_probe.completion_snapshot_valid = CaptureUnitRecord(
+        unit_move_apply_probe.unit_record_address,
+        unit_move_apply_probe.completion_snapshot);
+    if (unit_move_apply_probe.presentation_snapshot_valid &&
+        unit_move_apply_probe.completion_snapshot_valid)
+    {
+        LogUnitRecordDiff(
+            unit_move_apply_probe.sequence,
+            "during-presentation",
+            unit_move_apply_probe.presentation_snapshot,
+            unit_move_apply_probe.completion_snapshot);
+    }
+    LogUnitRecordSnapshot(
+        unit_move_apply_probe.sequence,
+        "presentation-end",
+        unit_move_apply_probe.unit_record_address,
+        unit_move_apply_probe.completion_snapshot_valid,
+        unit_move_apply_probe.completion_snapshot);
+
+    const auto   now = std::chrono::steady_clock::now();
+    const double elapsed_ms =
+        std::chrono::duration<double, std::milli>(
+            now - unit_move_apply_probe.presentation_begin)
+            .count();
+    const double wait_ms = unit_move_apply_probe.presentation_polls == 0
+                               ? 0.0
+                               : std::chrono::duration<double, std::milli>(
+                                     now - unit_move_apply_probe.presentation_wait_begin)
+                                     .count();
+    REXLOG_INFO(
+        "QoL movement probe: presentation-end={} target={:08X} "
+        "result={:08X} polls={} elapsed={:.3f}ms wait={:.3f}ms",
+        unit_move_apply_probe.sequence,
+        unit_move_apply_probe.presentation_target,
+        unit_move_apply_probe.presentation_result,
+        unit_move_apply_probe.presentation_polls,
+        elapsed_ms,
+        wait_ms);
+    unit_move_apply_probe.presentation_active = false;
 }
 
 void ReRevvedCompatNullOptionalDispatch(PPCRegister& r0, PPCRegister& r3)

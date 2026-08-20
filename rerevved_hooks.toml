@@ -10,6 +10,85 @@ name = "ReRevvedProbeGameStart"
 address = 0x82C7DF58
 name = "ReRevvedProbeGameplayFrame"
 
+# Command 0x11 is the self-identifying Move command. These diagnostic hooks
+# bracket submission and the bounded simulation case without reading or
+# mutating guest state.
+
+[[midasm_hook]]
+address = 0x82CE1950
+name = "ReRevvedProbeUnitMoveSubmit"
+registers = ["r3", "r4", "r5", "r6", "r7", "r8"]
+
+[[midasm_hook]]
+address = 0x82CDEDFC
+name = "ReRevvedProbeUnitMoveApplyBegin"
+registers = ["r31", "r15", "r29"]
+
+[[midasm_hook]]
+address = 0x82CDEE84
+name = "ReRevvedProbeUnitMoveMapUpdateBegin"
+
+[[midasm_hook]]
+address = 0x82CDEE88
+name = "ReRevvedProbeUnitMoveMapUpdateEnd"
+
+[[midasm_hook]]
+address = 0x82CDF134
+name = "ReRevvedProbeUnitMovePresentationBegin"
+registers = ["ctr"]
+
+[[midasm_hook]]
+address = 0x82CDF138
+name = "ReRevvedProbeUnitMovePresentationReturned"
+registers = ["r3"]
+
+[[midasm_hook]]
+address = 0x82CDF164
+name = "ReRevvedProbeUnitMovePresentationPoll"
+
+[[midasm_hook]]
+address = 0x82CDF184
+name = "ReRevvedProbeUnitMovePresentationEnd"
+
+[[midasm_hook]]
+address = 0x82CDF324
+name = "ReRevvedProbeUnitMovePresentationBegin"
+registers = ["ctr"]
+
+[[midasm_hook]]
+address = 0x82CDF328
+name = "ReRevvedProbeUnitMovePresentationReturned"
+registers = ["r3"]
+
+[[midasm_hook]]
+address = 0x82CDF340
+name = "ReRevvedProbeUnitMovePresentationPoll"
+
+[[midasm_hook]]
+address = 0x82CDF36C
+name = "ReRevvedProbeUnitMovePresentationEnd"
+
+[[midasm_hook]]
+address = 0x82CD7580
+name = "ReRevvedProbeUnitMoveDurationSet"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x82CD758C
+name = "ReRevvedProbeUnitMoveAnimationBegin"
+
+[[midasm_hook]]
+address = 0x82CD7590
+name = "ReRevvedProbeUnitMovePresentationPoll"
+
+[[midasm_hook]]
+address = 0x82CD75C4
+name = "ReRevvedProbeUnitMovePresentationEnd"
+
+[[midasm_hook]]
+address = 0x82CE16AC
+name = "ReRevvedProbeUnitMoveApplyEnd"
+
 # Ring-buffer initialization brackets the guest reset. Pause the host GPU while
 # the guest resets the ring, then resume it before the next instruction.
 
