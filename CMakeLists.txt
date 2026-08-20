@@ -52,5 +52,6 @@ target_include_directories(rerevved PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/generated/default
 )
+target_compile_definitions(rerevved PRIVATE REREVVED_VERSION="${PROJECT_VERSION}")
 target_link_libraries(rerevved PRIVATE rex::runtime)
 rexglue_configure_target(rerevved GPU_PLUGINS xenos)
