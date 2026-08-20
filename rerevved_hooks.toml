@@ -182,6 +182,20 @@ address = 0x82CF0CB0
 name = "ReRevvedProbeCivilizationBonusLookup"
 registers = ["r3", "r4", "r5"]
 
+# These shared unit-stat accessors read the 0x94-byte unit-definition table.
+# The default-off probes compare combat and independently recovered AI-scoring
+# callers without changing the returned value or guest state.
+
+[[midasm_hook]]
+address = 0x82CF2230
+name = "ReRevvedProbeUnitAttackLookup"
+registers = ["r3", "r4", "lr"]
+
+[[midasm_hook]]
+address = 0x82CF21A0
+name = "ReRevvedProbeUnitDefenseLookup"
+registers = ["r3", "r4", "lr"]
+
 # The unit branch of the central rush-cost routine computes the displayed and
 # submitted cost at 0x82CE2934. The Rush command consumer later converts that
 # submitted gold amount back into production before storing both production and

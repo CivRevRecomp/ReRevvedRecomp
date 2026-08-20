@@ -177,6 +177,16 @@ EXPECTED_HOOKS = [
         "registers": ["r3", "r4", "r5"],
     },
     {
+        "address": 0x82CF2230,
+        "name": "ReRevvedProbeUnitAttackLookup",
+        "registers": ["r3", "r4", "lr"],
+    },
+    {
+        "address": 0x82CF21A0,
+        "name": "ReRevvedProbeUnitDefenseLookup",
+        "registers": ["r3", "r4", "lr"],
+    },
+    {
         "address": 0x82CE2938,
         "name": "ReRevvedProbeRushCostDisplay",
         "registers": ["r27", "r29", "r30", "r31", "r6", "r7", "r11"],
@@ -513,6 +523,26 @@ class HookContractTests(unittest.TestCase):
             "\tctx.r11.s64 = -2097741824;"
         )
         self.assertEqual(generated.count(expected), 1)
+
+    def test_generated_unit_stat_probe_placement_when_available(self) -> None:
+        paths = sorted(GENERATED.glob("rerevved_recomp.*.cpp"))
+        if not paths:
+            self.skipTest("generated sources are not available")
+
+        generated = "".join(path.read_text(encoding="utf-8") for path in paths)
+        expected = {
+            "sub_82CF2230": "ReRevvedProbeUnitAttackLookup",
+            "sub_82CF21A0": "ReRevvedProbeUnitDefenseLookup",
+        }
+        for function, hook in expected.items():
+            placement = (
+                f"DEFINE_REX_FUNC({function}) {{\n"
+                "\tREX_FUNC_PROLOGUE();\n"
+                "\tuint32_t ea{};\n"
+                "\t// mflr r12\n"
+                f"\t{hook}(ctx.r3, ctx.r4, ctx.lr);"
+            )
+            self.assertEqual(generated.count(placement), 1)
 
     def test_generated_vector_glyph_cache_hook_when_available(self) -> None:
         paths = sorted(GENERATED.glob("rerevved_recomp.*.cpp"))

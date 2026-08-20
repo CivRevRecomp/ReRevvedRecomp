@@ -28,6 +28,8 @@ REXCVAR_DEFINE_BOOL(qol_probe_combat, false, "ReRevved/Diagnostics", "Log bounde
     .debug_only();
 REXCVAR_DEFINE_BOOL(qol_probe_civ_bonuses, false, "ReRevved/Diagnostics", "Log bounded civilization bonus table queries")
     .debug_only();
+REXCVAR_DEFINE_BOOL(qol_probe_unit_stats, false, "ReRevved/Diagnostics", "Compare combat and AI unit-stat table readers")
+    .debug_only();
 REXCVAR_DEFINE_BOOL(qol_probe_rush_cost, false, "ReRevved/Diagnostics", "Log displayed and applied unit rush-cost arithmetic")
     .debug_only();
 REXCVAR_DEFINE_BOOL(qol_fast_combat, false, "ReRevved/QoL", "Use the native 0.5 pace divisor on the mapped combat presentation path")
@@ -281,6 +283,14 @@ struct CivilizationBonusProbeState
 };
 
 thread_local CivilizationBonusProbeState civilization_bonus_probe{};
+
+struct UnitStatProbeState
+{
+    size_t                    seen_count = 0;
+    std::array<uint32_t, 384> seen{};
+};
+
+thread_local UnitStatProbeState unit_stat_probe{};
 
 struct RushCostDisplaySnapshot
 {
@@ -604,6 +614,127 @@ GameplayStateSnapshot ReadGameplayState()
     state.api_available = state.gameplay_active && state.interface_update &&
                           state.turn_owner_known && state.human_turn;
     return state;
+}
+
+enum class UnitStatConsumer : uint8_t
+{
+    combat,
+    unit_choice,
+    turn_evaluation,
+    turn_filter,
+    unknown,
+};
+
+UnitStatConsumer ClassifyUnitStatConsumer(uint32_t caller)
+{
+    if (caller >= 0x82CD9970 && caller < 0x82CDDEF8)
+    {
+        return UnitStatConsumer::combat;
+    }
+    if (caller >= 0x82CB44E0 && caller < 0x82CB6E48)
+    {
+        return UnitStatConsumer::unit_choice;
+    }
+    if (caller >= 0x82CB6E48 && caller < 0x82CBC8E8)
+    {
+        return UnitStatConsumer::turn_evaluation;
+    }
+    if (caller >= 0x82CBF570 && caller < 0x82CC1850)
+    {
+        return UnitStatConsumer::turn_filter;
+    }
+    return UnitStatConsumer::unknown;
+}
+
+const char* UnitStatConsumerName(UnitStatConsumer consumer)
+{
+    switch (consumer)
+    {
+        case UnitStatConsumer::combat:
+            return "combat";
+        case UnitStatConsumer::unit_choice:
+            return "unit-choice";
+        case UnitStatConsumer::turn_evaluation:
+            return "turn-evaluation";
+        case UnitStatConsumer::turn_filter:
+            return "turn-filter";
+        default:
+            return "unknown";
+    }
+}
+
+void RecordUnitStatLookup(const char*  stat,
+                          uint32_t     stat_index,
+                          uint32_t     field_offset,
+                          PPCRegister& r3,
+                          PPCRegister& r4,
+                          uint64_t     lr)
+{
+    if (!REXCVAR_GET(qol_probe_unit_stats))
+    {
+        unit_stat_probe = {};
+        return;
+    }
+
+    constexpr uint32_t kUnitDefinitionTable = 0x82F700D8;
+    constexpr uint32_t kUnitDefinitionSize  = 0x94;
+    constexpr uint32_t kUnitDefinitionCount = 29;
+    constexpr uint32_t kPlayerCount         = 6;
+    const uint32_t     player               = r3.u32;
+    const uint32_t     unit_type            = r4.u32;
+    const uint32_t     caller               = static_cast<uint32_t>(lr);
+    const auto         consumer             = ClassifyUnitStatConsumer(caller);
+    if (consumer == UnitStatConsumer::unknown || player >= kPlayerCount ||
+        unit_type >= kUnitDefinitionCount)
+    {
+        return;
+    }
+
+    const auto     gameplay = ReadGameplayState();
+    const uint32_t active_player =
+        gameplay.active_player < kPlayerCount ? gameplay.active_player : 7;
+    const uint32_t consumer_index = static_cast<uint32_t>(consumer);
+    const uint32_t key            = (((consumer_index * 2 + stat_index) * kPlayerCount +
+                                      player) *
+                                         8 +
+                                     active_player);
+    if (std::find(
+            unit_stat_probe.seen.begin(),
+            unit_stat_probe.seen.begin() + unit_stat_probe.seen_count,
+            key) != unit_stat_probe.seen.begin() + unit_stat_probe.seen_count)
+    {
+        return;
+    }
+    if (unit_stat_probe.seen_count == unit_stat_probe.seen.size())
+    {
+        return;
+    }
+    unit_stat_probe.seen[unit_stat_probe.seen_count++] = key;
+
+    uint8_t base_value = 0;
+    if (!TryReadGuestU8(
+            kUnitDefinitionTable + unit_type * kUnitDefinitionSize +
+                field_offset,
+            base_value))
+    {
+        return;
+    }
+
+    const bool player_human =
+        player < 32 &&
+        (gameplay.human_player_mask & (uint32_t{ 1 } << player)) != 0;
+    REXLOG_INFO(
+        "QoL unit-stat probe: consumer={} stat={} player={} unit={} base={} "
+        "caller={:08X} active-player={} human-mask={:08X} player-human={}",
+        UnitStatConsumerName(consumer),
+        stat,
+        player,
+        unit_type,
+        static_cast<int32_t>(static_cast<int8_t>(base_value)),
+        caller,
+        gameplay.active_player,
+        gameplay.human_player_mask,
+        player_human);
 }
 
 uint64_t CurrentThreadToken()
@@ -1490,6 +1621,20 @@ void ReRevvedProbeCivilizationBonusLookup(PPCRegister& r3,
         bonus,
         exact,
         active);
+}
+
+void ReRevvedProbeUnitAttackLookup(PPCRegister& r3,
+                                   PPCRegister& r4,
+                                   uint64_t     lr)
+{
+    RecordUnitStatLookup("attack", 0, 0x40, r3, r4, lr);
+}
+
+void ReRevvedProbeUnitDefenseLookup(PPCRegister& r3,
+                                    PPCRegister& r4,
+                                    uint64_t     lr)
+{
+    RecordUnitStatLookup("defense", 1, 0x41, r3, r4, lr);
 }
 
 void ReRevvedProbeRushCostDisplay(PPCRegister& r27,
