@@ -224,7 +224,6 @@ registers = ["r4"]
 address = 0x82D829E8
 name = "ReRevvedProbeSaveSlotSaveOutcome"
 registers = ["r25", "r29"]
-
 # Ring-buffer initialization brackets the guest reset. Pause the host GPU while
 # the guest resets the ring, then resume it before the next instruction.
 
