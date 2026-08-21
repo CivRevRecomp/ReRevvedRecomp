@@ -16,20 +16,28 @@ namespace rerevved::gameplay
 
 struct Snapshot
 {
-    uint64_t frame_sequence    = 0;
-    uint32_t frontend_root     = 0;
-    uint32_t frontend_state    = 0;
-    uint32_t frontend_key      = UINT32_MAX;
-    uint32_t active_player     = UINT32_MAX;
-    uint32_t human_player_mask = 0;
-    uint32_t interface_gate    = 0;
-    bool     frontend_known    = false;
-    bool     gameplay_active   = false;
-    bool     turn_owner_known  = false;
-    bool     human_turn        = false;
-    bool     interface_known   = false;
-    bool     interface_update  = false;
-    bool     available         = false;
+    uint64_t frame_sequence     = 0;
+    uint32_t frontend_root      = 0;
+    uint32_t frontend_state     = 0;
+    uint32_t frontend_key       = UINT32_MAX;
+    uint32_t active_player      = UINT32_MAX;
+    uint32_t human_player_mask  = 0;
+    uint32_t interface_gate     = 0;
+    uint32_t civilization       = UINT32_MAX;
+    uint32_t era                = UINT32_MAX;
+    int32_t  year               = REREVVED_GAMEPLAY_YEAR_UNKNOWN;
+    uint32_t turn               = UINT32_MAX;
+    bool     frontend_known     = false;
+    bool     gameplay_active    = false;
+    bool     turn_owner_known   = false;
+    bool     human_turn         = false;
+    bool     interface_known    = false;
+    bool     interface_update   = false;
+    bool     civilization_known = false;
+    bool     era_known          = false;
+    bool     year_known         = false;
+    bool     turn_number_known  = false;
+    bool     available          = false;
 };
 
 namespace
@@ -205,6 +213,26 @@ static Snapshot ReadGuestSnapshot()
         state.human_turn =
             (state.human_player_mask &
              (uint32_t{ 1 } << state.active_player)) != 0;
+    }
+
+    if (state.gameplay_active && state.human_turn &&
+        state.active_player < kPlayerCount)
+    {
+        state.civilization_known =
+            TryReadU32(memory,
+                       kPlayerCivilizationArray +
+                           state.active_player * sizeof(uint32_t),
+                       state.civilization);
+        state.era_known =
+            TryReadU32(memory,
+                       kPlayerEraArray +
+                           state.active_player * sizeof(uint32_t),
+                       state.era);
+        state.turn_number_known =
+            TryReadU32(memory, kCurrentTurnGlobal, state.turn);
+        uint32_t year    = 0;
+        state.year_known = TryReadU32(memory, kCurrentYearGlobal, year);
+        state.year       = static_cast<int32_t>(year);
     }
 
     uint8_t interface_byte = 0;
@@ -423,6 +451,10 @@ extern "C" int ReRevvedGetGameplayState(
 
     out->struct_size   = sizeof(*out);
     out->active_player = REREVVED_GAMEPLAY_PLAYER_UNKNOWN;
+    out->civilization  = REREVVED_GAMEPLAY_CIVILIZATION_UNKNOWN;
+    out->era           = REREVVED_GAMEPLAY_ERA_UNKNOWN;
+    out->year          = REREVVED_GAMEPLAY_YEAR_UNKNOWN;
+    out->turn          = REREVVED_GAMEPLAY_TURN_UNKNOWN;
 
     rerevved::gameplay::Snapshot snapshot{};
     if (!rerevved::gameplay::GetPublishedSnapshot(snapshot))
@@ -443,6 +475,26 @@ extern "C" int ReRevvedGetGameplayState(
     if (snapshot.interface_known)
     {
         out->valid_fields |= REREVVED_GAMEPLAY_VALID_INTERFACE;
+    }
+    if (snapshot.civilization_known)
+    {
+        out->valid_fields |= REREVVED_GAMEPLAY_VALID_CIVILIZATION;
+        out->civilization = static_cast<int32_t>(snapshot.civilization);
+    }
+    if (snapshot.era_known)
+    {
+        out->valid_fields |= REREVVED_GAMEPLAY_VALID_ERA;
+        out->era = static_cast<int32_t>(snapshot.era);
+    }
+    if (snapshot.year_known)
+    {
+        out->valid_fields |= REREVVED_GAMEPLAY_VALID_YEAR;
+        out->year = snapshot.year;
+    }
+    if (snapshot.turn_number_known)
+    {
+        out->valid_fields |= REREVVED_GAMEPLAY_VALID_TURN_NUMBER;
+        out->turn = static_cast<int32_t>(snapshot.turn);
     }
 
     out->frame_sequence   = snapshot.frame_sequence;
