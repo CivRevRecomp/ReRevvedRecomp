@@ -13,6 +13,10 @@ GENERATED = ROOT / "generated" / "default"
 
 EXPECTED_HOOKS = [
     {
+        "address": 0x82C7DF58,
+        "name": "ReRevvedPublishGameplayState",
+    },
+    {
         "address": 0x8269CAE0,
         "name": "ReRevvedCompatRingInitializeBegin",
         "registers": ["r3", "r4"],
