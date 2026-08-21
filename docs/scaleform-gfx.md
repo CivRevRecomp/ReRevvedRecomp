@@ -30,15 +30,17 @@ Keep the fallback at the open boundary so the guest's deferred loader and
 movie registration remain authoritative. A missing font library can look like
 a renderer defect because `SetText` may produce no tessellated glyph geometry.
 
-## Vector-glyph cache
+## Glyph-texture invalidation
 
-GFx defaults its vector-glyph cache to 512 entries. When the cache reaches that
-limit while its oldest entry is still in use, the guest returns a null glyph.
-This appears as an isolated missing letter that returns on a later redraw.
+GFx retains its stock 512-entry vector-glyph cache. ReRevved does not alter the
+guest cache capacity.
 
-`ReRevvedCompatExpandGfxVectorGlyphCache` runs after GFx creates the cache and
-changes only that default limit from 512 to 1024. It leaves any non-default
-configuration untouched. A sustained text-heavy run confirmed the repair.
+Glyph-atlas textures rely on ReXGlue's shared-memory invalidation. ReXGlue must
+install each texture write watch before requesting or uploading its guest-memory
+range. A write during preparation or upload then marks the texture outdated for
+the next request. A failed load removes its provisional watches and restores the
+outdated state so the texture can be retried. This prevents stale host textures
+from appearing as missing or mangled glyphs.
 
 ## Removed GFx trace hooks
 
