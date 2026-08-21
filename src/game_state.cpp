@@ -35,10 +35,15 @@ struct Snapshot
 namespace
 {
 
-constexpr uint32_t kInterfaceGateGlobal   = 0x8314F28C;
-constexpr uint32_t kFrontendRootGlobal    = 0x82FFD624;
-constexpr uint32_t kActivePlayerGlobal    = 0x8312B8E8;
-constexpr uint32_t kHumanPlayerMaskGlobal = 0x8312E608;
+constexpr uint32_t kInterfaceGateGlobal     = 0x8314F28C;
+constexpr uint32_t kFrontendRootGlobal      = 0x82FFD624;
+constexpr uint32_t kPlayerEraArray          = 0x830ECD08;
+constexpr uint32_t kPlayerCivilizationArray = 0x830ECD28;
+constexpr uint32_t kCurrentTurnGlobal       = 0x8312B8DC;
+constexpr uint32_t kCurrentYearGlobal       = 0x8312B8E0;
+constexpr uint32_t kActivePlayerGlobal      = 0x8312B8E8;
+constexpr uint32_t kHumanPlayerMaskGlobal   = 0x8312E608;
+constexpr uint32_t kPlayerCount             = 6;
 
 struct PublishedSlot
 {
@@ -62,6 +67,40 @@ struct ProbeState
 };
 
 thread_local ProbeState g_probe_state{};
+
+struct CalendarProbeState
+{
+    bool     active             = false;
+    uint32_t player             = UINT32_MAX;
+    uint32_t turn               = 0;
+    int32_t  year               = 0;
+    uint32_t civilization       = 0;
+    uint32_t era                = 0;
+    bool     turn_valid         = false;
+    bool     year_valid         = false;
+    bool     civilization_valid = false;
+    bool     era_valid          = false;
+    bool     gameplay_active    = false;
+    bool     human_turn         = false;
+    bool     available          = false;
+};
+
+thread_local CalendarProbeState g_calendar_probe_state{};
+
+bool SameCalendarState(const CalendarProbeState& left,
+                       const CalendarProbeState& right)
+{
+    return left.player == right.player && left.turn == right.turn &&
+           left.year == right.year &&
+           left.civilization == right.civilization && left.era == right.era &&
+           left.turn_valid == right.turn_valid &&
+           left.year_valid == right.year_valid &&
+           left.civilization_valid == right.civilization_valid &&
+           left.era_valid == right.era_valid &&
+           left.gameplay_active == right.gameplay_active &&
+           left.human_turn == right.human_turn &&
+           left.available == right.available;
+}
 
 bool SameState(const Snapshot& left, const Snapshot& right)
 {
@@ -281,6 +320,73 @@ void ProbePublishedSnapshot(bool enabled)
         state.human_turn,
         state.interface_gate,
         state.interface_update,
+        state.available);
+}
+
+void ProbeCalendarState(bool enabled)
+{
+    if (!enabled)
+    {
+        g_calendar_probe_state = {};
+        return;
+    }
+
+    Snapshot snapshot{};
+    if (!GetPublishedSnapshot(snapshot))
+    {
+        return;
+    }
+
+    CalendarProbeState state{};
+    state.active          = true;
+    state.player          = snapshot.active_player;
+    state.gameplay_active = snapshot.gameplay_active;
+    state.human_turn      = snapshot.human_turn;
+    state.available       = snapshot.available;
+
+    auto*    runtime = rex::Runtime::instance();
+    auto*    memory  = runtime ? runtime->memory() : nullptr;
+    uint32_t year    = 0;
+    state.turn_valid = TryReadU32(memory, kCurrentTurnGlobal, state.turn);
+    state.year_valid = TryReadU32(memory, kCurrentYearGlobal, year);
+    state.year       = static_cast<int32_t>(year);
+
+    if (state.player < kPlayerCount)
+    {
+        state.civilization_valid =
+            TryReadU32(memory,
+                       kPlayerCivilizationArray +
+                           state.player * sizeof(uint32_t),
+                       state.civilization);
+        state.era_valid =
+            TryReadU32(memory,
+                       kPlayerEraArray + state.player * sizeof(uint32_t),
+                       state.era);
+    }
+
+    if (g_calendar_probe_state.active &&
+        SameCalendarState(state, g_calendar_probe_state))
+    {
+        return;
+    }
+
+    g_calendar_probe_state = state;
+    REXLOG_INFO(
+        "Presence calendar probe: player={} civilization={} "
+        "civilization_valid={} era={} era_valid={} turn={} turn_valid={} "
+        "year={} year_valid={} gameplay_active={} human_turn={} "
+        "api_available={}",
+        state.player,
+        state.civilization,
+        state.civilization_valid,
+        state.era,
+        state.era_valid,
+        state.turn,
+        state.turn_valid,
+        state.year,
+        state.year_valid,
+        state.gameplay_active,
+        state.human_turn,
         state.available);
 }
 

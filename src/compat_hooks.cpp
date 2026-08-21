@@ -36,6 +36,8 @@ REXCVAR_DEFINE_BOOL(qol_probe_rush_cost, false, "ReRevved/Diagnostics", "Log dis
     .debug_only();
 REXCVAR_DEFINE_BOOL(qol_probe_save_slots, false, "ReRevved/Diagnostics", "Log selected save-slot identifiers at native load and save boundaries")
     .debug_only();
+REXCVAR_DEFINE_BOOL(presence_probe_calendar, false, "ReRevved/Diagnostics", "Log bounded Discord calendar candidates")
+    .debug_only();
 REXCVAR_DEFINE_BOOL(qol_fast_combat, false, "ReRevved/QoL", "Use the native 0.5 pace divisor on the mapped combat presentation path")
     .debug_only();
 
@@ -727,6 +729,8 @@ void ReRevvedProbeGameStart()
 void ReRevvedProbeGameplayFrame()
 {
     rerevved::gameplay::PublishFrameSnapshot();
+    rerevved::gameplay::ProbeCalendarState(
+        REXCVAR_GET(presence_probe_calendar));
 
     const bool probe_frame = REXCVAR_GET(qol_probe_gameplay_frame);
     const bool probe_state = REXCVAR_GET(qol_probe_gameplay_state);
