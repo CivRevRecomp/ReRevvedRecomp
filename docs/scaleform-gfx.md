@@ -76,7 +76,7 @@ removed.
 | `ReRevvedTraceGfxImageShapeDraw` | Diagnostic only | Recorded draw counts in private trace state only. |
 | `ReRevvedTraceGfxImageShapeDisplayEnd` | Diagnostic only | Read and logged accumulated diagnostic state only. |
 
-`rerevved_functions.toml` had no uncertain trace-only entries during the
+`config/rerevved_functions.toml` had no uncertain trace-only entries during the
 audit.
 
 ## Input

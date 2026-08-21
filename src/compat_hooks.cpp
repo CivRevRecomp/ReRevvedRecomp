@@ -18,7 +18,7 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/xmemory.h>
 
-#include "gameplay_state.h"
+#include "game_state.h"
 
 REXCVAR_DEFINE_BOOL(qol_probe_gameplay_frame, false, "ReRevved/Diagnostics", "Log the candidate playable-frame cadence and thread")
     .debug_only();
@@ -201,17 +201,6 @@ struct GameplayFrameProbeState
 };
 
 thread_local GameplayFrameProbeState gameplay_frame_probe{};
-
-using GameplayStateSnapshot = rerevved::gameplay::Snapshot;
-
-struct GameplayStateProbeState
-{
-    bool                  active = false;
-    uint64_t              frames = 0;
-    GameplayStateSnapshot last;
-};
-
-thread_local GameplayStateProbeState gameplay_state_probe{};
 
 struct UnitMoveApplyProbeState
 {
@@ -665,9 +654,11 @@ void RecordUnitStatLookup(const char*  stat,
         return;
     }
 
-    const auto     gameplay = rerevved::gameplay::ReadGuestSnapshot();
+    uint32_t active_player_state = UINT32_MAX;
+    uint32_t human_player_mask   = 0;
+    rerevved::gameplay::ReadProbePlayerState(active_player_state, human_player_mask);
     const uint32_t active_player =
-        gameplay.active_player < kPlayerCount ? gameplay.active_player : 7;
+        active_player_state < kPlayerCount ? active_player_state : 7;
     const uint32_t consumer_index = static_cast<uint32_t>(consumer);
     const uint32_t key            = (((consumer_index * 2 + stat_index) * kPlayerCount +
                                       player) *
@@ -697,7 +688,7 @@ void RecordUnitStatLookup(const char*  stat,
 
     const bool player_human =
         player < 32 &&
-        (gameplay.human_player_mask & (uint32_t{ 1 } << player)) != 0;
+        (human_player_mask & (uint32_t{ 1 } << player)) != 0;
     REXLOG_INFO(
         "QoL unit-stat probe: consumer={} stat={} player={} unit={} base={} "
         "caller={:08X} active-player={} human-mask={:08X} player-human={}",
@@ -707,8 +698,8 @@ void RecordUnitStatLookup(const char*  stat,
         unit_type,
         static_cast<int32_t>(static_cast<int8_t>(base_value)),
         caller,
-        gameplay.active_player,
-        gameplay.human_player_mask,
+        active_player_state,
+        human_player_mask,
         player_human);
 }
 
@@ -739,10 +730,10 @@ void ReRevvedProbeGameplayFrame()
 
     const bool probe_frame = REXCVAR_GET(qol_probe_gameplay_frame);
     const bool probe_state = REXCVAR_GET(qol_probe_gameplay_state);
+    rerevved::gameplay::ProbePublishedSnapshot(probe_state);
     if (!probe_frame && !probe_state)
     {
         gameplay_frame_probe = {};
-        gameplay_state_probe = {};
         return;
     }
 
@@ -777,40 +768,6 @@ void ReRevvedProbeGameplayFrame()
                 thread,
                 start_seen,
                 start_seen && thread == start_thread);
-        }
-    }
-
-    if (probe_state)
-    {
-        ++gameplay_state_probe.frames;
-        GameplayStateSnapshot state{};
-        if (!rerevved::gameplay::GetPublishedSnapshot(state))
-        {
-            return;
-        }
-        if (!gameplay_state_probe.active ||
-            !state.SameState(gameplay_state_probe.last))
-        {
-            gameplay_state_probe.active = true;
-            gameplay_state_probe.last   = state;
-            REXLOG_INFO(
-                "QoL state probe: frame={} frontend_root={:08X} "
-                "frontend_state={:08X} frontend_key={:08X} gameplay_active={} "
-                "active_player={:08X} human_mask={:08X} turn_owner_known={} "
-                "human_turn={} interface_gate={:08X} interface_update={} "
-                "api_available={}",
-                gameplay_state_probe.frames,
-                state.frontend_root,
-                state.frontend_state,
-                state.frontend_key,
-                state.gameplay_active,
-                state.active_player,
-                state.human_player_mask,
-                state.turn_owner_known,
-                state.human_turn,
-                state.interface_gate,
-                state.interface_update,
-                state.available);
         }
     }
 }

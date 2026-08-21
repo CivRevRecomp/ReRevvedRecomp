@@ -1,17 +1,37 @@
-#include "gameplay_state.h"
+#include "game_state.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstring>
 
+#include <rex/logging.h>
 #include <rex/runtime.h>
 #include <rex/system/xmemory.h>
 
-#include <rerevved/gameplay_api.h>
+#include <game_state.h>
 
 namespace rerevved::gameplay
 {
+
+struct Snapshot
+{
+    uint64_t frame_sequence    = 0;
+    uint32_t frontend_root     = 0;
+    uint32_t frontend_state    = 0;
+    uint32_t frontend_key      = UINT32_MAX;
+    uint32_t active_player     = UINT32_MAX;
+    uint32_t human_player_mask = 0;
+    uint32_t interface_gate    = 0;
+    bool     frontend_known    = false;
+    bool     gameplay_active   = false;
+    bool     turn_owner_known  = false;
+    bool     human_turn        = false;
+    bool     interface_known   = false;
+    bool     interface_update  = false;
+    bool     available         = false;
+};
+
 namespace
 {
 
@@ -33,6 +53,32 @@ std::atomic<uint32_t>        g_active_slot{ 0 };
 std::atomic<bool>            g_snapshot_published{ false };
 uint32_t                     g_writer_slot    = 0;
 uint64_t                     g_frame_sequence = 0;
+
+struct ProbeState
+{
+    bool     active = false;
+    uint64_t frames = 0;
+    Snapshot last;
+};
+
+thread_local ProbeState g_probe_state{};
+
+bool SameState(const Snapshot& left, const Snapshot& right)
+{
+    return left.frontend_root == right.frontend_root &&
+           left.frontend_state == right.frontend_state &&
+           left.frontend_key == right.frontend_key &&
+           left.active_player == right.active_player &&
+           left.human_player_mask == right.human_player_mask &&
+           left.interface_gate == right.interface_gate &&
+           left.frontend_known == right.frontend_known &&
+           left.gameplay_active == right.gameplay_active &&
+           left.turn_owner_known == right.turn_owner_known &&
+           left.human_turn == right.human_turn &&
+           left.interface_known == right.interface_known &&
+           left.interface_update == right.interface_update &&
+           left.available == right.available;
+}
 
 bool IsGuestPointer(uint32_t address)
 {
@@ -86,7 +132,7 @@ bool TryReadU32(rex::memory::Memory* memory, uint32_t address, uint32_t& value)
 
 } // namespace
 
-Snapshot ReadGuestSnapshot()
+static Snapshot ReadGuestSnapshot()
 {
     Snapshot state{};
     auto*    runtime = rex::Runtime::instance();
@@ -163,7 +209,7 @@ void PublishFrameSnapshot()
     g_snapshot_published.store(true, std::memory_order_release);
 }
 
-bool GetPublishedSnapshot(Snapshot& out)
+static bool GetPublishedSnapshot(Snapshot& out)
 {
     if (!g_snapshot_published.load(std::memory_order_acquire))
     {
@@ -195,6 +241,54 @@ bool GetPublishedSnapshot(Snapshot& out)
         slot.users.fetch_sub(1, std::memory_order_release);
         return true;
     }
+}
+
+void ProbePublishedSnapshot(bool enabled)
+{
+    if (!enabled)
+    {
+        g_probe_state = {};
+        return;
+    }
+
+    ++g_probe_state.frames;
+    Snapshot state{};
+    if (!GetPublishedSnapshot(state))
+    {
+        return;
+    }
+    if (g_probe_state.active && SameState(state, g_probe_state.last))
+    {
+        return;
+    }
+
+    g_probe_state.active = true;
+    g_probe_state.last   = state;
+    REXLOG_INFO(
+        "QoL state probe: frame={} frontend_root={:08X} "
+        "frontend_state={:08X} frontend_key={:08X} gameplay_active={} "
+        "active_player={:08X} human_mask={:08X} turn_owner_known={} "
+        "human_turn={} interface_gate={:08X} interface_update={} "
+        "api_available={}",
+        g_probe_state.frames,
+        state.frontend_root,
+        state.frontend_state,
+        state.frontend_key,
+        state.gameplay_active,
+        state.active_player,
+        state.human_player_mask,
+        state.turn_owner_known,
+        state.human_turn,
+        state.interface_gate,
+        state.interface_update,
+        state.available);
+}
+
+void ReadProbePlayerState(uint32_t& active_player, uint32_t& human_player_mask)
+{
+    const Snapshot state = ReadGuestSnapshot();
+    active_player        = state.active_player;
+    human_player_mask    = state.human_player_mask;
 }
 
 } // namespace rerevved::gameplay

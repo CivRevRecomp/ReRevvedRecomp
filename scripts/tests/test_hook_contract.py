@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-HOOK_CONFIG = ROOT / "rerevved_hooks.toml"
+HOOK_CONFIG = ROOT / "config" / "rerevved_hooks.toml"
 HOOK_SOURCE = ROOT / "src" / "compat_hooks.cpp"
 GENERATED = ROOT / "generated" / "default"
 
