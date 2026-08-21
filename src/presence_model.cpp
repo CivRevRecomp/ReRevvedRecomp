@@ -14,27 +14,26 @@ struct CivilizationPresence
 {
     std::string_view people;
     std::string_view leader;
-    std::string_view leader_asset;
-    std::string_view civilization_asset;
+    std::string_view image_asset;
 };
 
 constexpr std::array<CivilizationPresence, 16> kCivilizations = {
-    CivilizationPresence{ "Romans", "Julius Caesar", "leader-roman", "civ-roman" },
-    CivilizationPresence{ "Egyptians", "Cleopatra", "leader-egyptian", "civ-egyptian" },
-    CivilizationPresence{ "Greeks", "Alexander the Great", "leader-greek", "civ-greek" },
-    CivilizationPresence{ "Spanish", "Isabella", "leader-spanish", "civ-spanish" },
-    CivilizationPresence{ "Germans", "Otto von Bismarck", "leader-german", "civ-german" },
-    CivilizationPresence{ "Russians", "Catherine the Great", "leader-russian", "civ-russian" },
-    CivilizationPresence{ "Chinese", "Mao Zedong", "leader-chinese", "civ-chinese" },
-    CivilizationPresence{ "Americans", "Abraham Lincoln", "leader-american", "civ-american" },
-    CivilizationPresence{ "Japanese", "Tokugawa Ieyasu", "leader-japanese", "civ-japanese" },
-    CivilizationPresence{ "French", "Napoleon", "leader-french", "civ-french" },
-    CivilizationPresence{ "Indians", "Mohandas Gandhi", "leader-indian", "civ-indian" },
-    CivilizationPresence{ "Arabs", "Saladin", "leader-arabian", "civ-arabian" },
-    CivilizationPresence{ "Aztecs", "Montezuma II", "leader-aztec", "civ-aztec" },
-    CivilizationPresence{ "Zulu", "Shaka", "leader-zulu", "civ-zulu" },
-    CivilizationPresence{ "Mongols", "Genghis Khan", "leader-mongolian", "civ-mongolian" },
-    CivilizationPresence{ "English", "Elizabeth I", "leader-english", "civ-english" },
+    CivilizationPresence{ "Romans", "Julius Caesar", "civ-roman" },
+    CivilizationPresence{ "Egyptians", "Cleopatra", "civ-egyptian" },
+    CivilizationPresence{ "Greeks", "Alexander the Great", "civ-greek" },
+    CivilizationPresence{ "Spanish", "Isabella", "civ-spanish" },
+    CivilizationPresence{ "Germans", "Otto von Bismarck", "civ-german" },
+    CivilizationPresence{ "Russians", "Catherine the Great", "civ-russian" },
+    CivilizationPresence{ "Chinese", "Mao Zedong", "civ-chinese" },
+    CivilizationPresence{ "Americans", "Abraham Lincoln", "civ-american" },
+    CivilizationPresence{ "Japanese", "Tokugawa Ieyasu", "civ-japanese" },
+    CivilizationPresence{ "French", "Napoleon", "civ-french" },
+    CivilizationPresence{ "Indians", "Mohandas Gandhi", "civ-indian" },
+    CivilizationPresence{ "Arabs", "Saladin", "civ-arabian" },
+    CivilizationPresence{ "Aztecs", "Montezuma II", "civ-aztec" },
+    CivilizationPresence{ "Zulu", "Shaka", "civ-zulu" },
+    CivilizationPresence{ "Mongols", "Genghis Khan", "civ-mongolian" },
+    CivilizationPresence{ "English", "Elizabeth I", "civ-english" },
 };
 
 constexpr std::array<std::string_view, 4> kEras = {
@@ -91,10 +90,8 @@ bool TryBuildGameplayPresence(const ReRevvedGameplayState& state,
         .state            = "Turn " + std::to_string(state.turn) + " | " +
                             std::string(kEras[state.era]) + " Era - " +
                             FormatYear(state.year),
-        .large_image_key  = std::string(civilization.leader_asset),
+        .large_image_key  = std::string(civilization.image_asset),
         .large_image_text = std::string(civilization.leader),
-        .small_image_key  = std::string(civilization.civilization_asset),
-        .small_image_text = std::string(civilization.people),
     };
     return true;
 }

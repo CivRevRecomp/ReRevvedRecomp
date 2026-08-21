@@ -53,24 +53,6 @@ int main()
     static_assert(offsetof(ReRevvedGameplayState, turn) == 56);
     static_assert(offsetof(ReRevvedGameplayState, reserved) == 60);
 
-    constexpr std::array<std::string_view, 16> kLeaderAssets = {
-        "leader-roman",
-        "leader-egyptian",
-        "leader-greek",
-        "leader-spanish",
-        "leader-german",
-        "leader-russian",
-        "leader-chinese",
-        "leader-american",
-        "leader-japanese",
-        "leader-french",
-        "leader-indian",
-        "leader-arabian",
-        "leader-aztec",
-        "leader-zulu",
-        "leader-mongolian",
-        "leader-english",
-    };
     constexpr std::array<std::string_view, 16> kCivilizationAssets = {
         "civ-roman",
         "civ-egyptian",
@@ -96,10 +78,10 @@ int main()
         rerevved::PresenceModel presence;
         Require(rerevved::TryBuildGameplayPresence(state, presence),
                 "playable civilization formats");
-        Require(presence.large_image_key == kLeaderAssets[civilization],
-                "leader asset key matches civilization");
-        Require(presence.small_image_key == kCivilizationAssets[civilization],
-                "symbol asset key matches civilization");
+        Require(presence.large_image_key == kCivilizationAssets[civilization],
+                "image asset key matches civilization");
+        Require(presence.small_image_key.empty(),
+                "civilization uses one image asset");
     }
 
     auto                    americans = GameplayState(7, 1, 1025);
