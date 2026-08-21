@@ -1,4 +1,4 @@
-#include "gameplay_state.h"
+#include "game_state.h"
 
 #include <algorithm>
 #include <array>
@@ -8,10 +8,29 @@
 #include <rex/runtime.h>
 #include <rex/system/xmemory.h>
 
-#include <rerevved/gameplay_api.h>
+#include <game_state.h>
 
 namespace rerevved::gameplay
 {
+
+struct Snapshot
+{
+    uint64_t frame_sequence    = 0;
+    uint32_t frontend_root     = 0;
+    uint32_t frontend_state    = 0;
+    uint32_t frontend_key      = UINT32_MAX;
+    uint32_t active_player     = UINT32_MAX;
+    uint32_t human_player_mask = 0;
+    uint32_t interface_gate    = 0;
+    bool     frontend_known    = false;
+    bool     gameplay_active   = false;
+    bool     turn_owner_known  = false;
+    bool     human_turn        = false;
+    bool     interface_known   = false;
+    bool     interface_update  = false;
+    bool     available         = false;
+};
+
 namespace
 {
 
@@ -86,7 +105,7 @@ bool TryReadU32(rex::memory::Memory* memory, uint32_t address, uint32_t& value)
 
 } // namespace
 
-Snapshot ReadGuestSnapshot()
+static Snapshot ReadGuestSnapshot()
 {
     Snapshot state{};
     auto*    runtime = rex::Runtime::instance();
@@ -163,7 +182,7 @@ void PublishFrameSnapshot()
     g_snapshot_published.store(true, std::memory_order_release);
 }
 
-bool GetPublishedSnapshot(Snapshot& out)
+static bool GetPublishedSnapshot(Snapshot& out)
 {
     if (!g_snapshot_published.load(std::memory_order_acquire))
     {

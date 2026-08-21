@@ -27,8 +27,8 @@ set(REREVVED_SOURCES
     src/app.cpp
     src/compat_hooks.cpp
     src/game_content.cpp
-    src/gameplay_state.cpp
-    src/gameplay_state.h
+    src/game_state.cpp
+    src/game_state.h
     src/imports.cpp
     src/main.cpp
     src/presence.cpp
@@ -51,7 +51,7 @@ endif()
 target_sources(rerevved PRIVATE ${GENERATED_SOURCES})
 target_include_directories(rerevved PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/api
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/generated/default
 )

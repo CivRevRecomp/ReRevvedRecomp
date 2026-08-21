@@ -1,8 +1,12 @@
 // Public C ABI for ReRevved's conservative gameplay-state snapshot.
 //
-// Mods do not link against the ReRevved executable. Copy this header into the
-// mod repository and resolve the two entry points from the host process at
-// runtime. Always check ReRevvedGameplayAbiVersion before reading state.
+// The guest frame thread publishes immutable snapshots for host-side readers.
+// Mods do not link against the ReRevved executable; they resolve the two entry
+// points from the host process and check ReRevvedGameplayAbiVersion first.
+//
+// ABI 1 evolves additively by consuming reserved fields or adding validity
+// bits without changing existing offsets. An incompatible change requires a
+// new ABI version.
 
 #pragma once
 
@@ -39,7 +43,14 @@ enum
 
 typedef struct ReRevvedGameplayState
 {
+    // Size written when out_size can hold this structure, including when the
+    // snapshot is unavailable. Smaller buffers are cleared as far as possible
+    // and rejected.
     uint32_t struct_size;
+
+    // A validity bit means that the corresponding source fields were read
+    // safely. available is stricter: every conservative playable-turn gate is
+    // satisfied. Valid fields may still be returned while available is zero.
     uint32_t valid_fields;
     uint64_t frame_sequence;
     int32_t  gameplay_active;

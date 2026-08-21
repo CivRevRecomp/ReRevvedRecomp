@@ -9,7 +9,7 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/xmemory.h>
 
-#include "gameplay_state.h"
+#include "game_state.h"
 
 namespace
 {
