@@ -18,13 +18,13 @@ unendorsed by the publisher. All trademarks belong to their respective owners.
 
 ## Play ReRevved
 
-- Download a stable archive from the
+- Download a stable release from the
   [ReRevved releases page](https://github.com/ReRevvedRecomp/rerevved/releases)
   and extract it completely.
 - Run `rerevved.exe`.
 - On first run, select a legally owned ISO or extracted version 1.3 content
   folder.
-- Config and saves are stored under `Documents\rerevved`; back up that folder
+- Config and saves are stored under `Documents\rerevved`. Back up that folder
   to preserve them.
 - Press F4 in game for settings and keyboard or controller rebinding.
 - See [display settings](docs/rexglue-runtime.md#display-settings) for window,
@@ -56,7 +56,7 @@ open one.
 
 <a href="LICENSE"><img src="https://www.gnu.org/graphics/gplv3-127x51.png" alt="GNU General Public License version 3"></a>
 
-Project-authored material uses the
+Project authored material uses the
 [GNU General Public License version 3](LICENSE). Third-party notices ship in
 `licenses/ReXGlue-LICENSE.txt`. Retail game content is not distributed by this
 project.
