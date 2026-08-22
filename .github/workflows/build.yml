@@ -473,8 +473,9 @@ jobs:
               if [[ "$line" =~ $runtime_line ]]; then
                 dependency="${BASH_REMATCH[1]}"
                 resolved_path="${BASH_REMATCH[2]}"
-                if [[ "$(readlink -f "$resolved_path")" !=
-                    "$package_root/$dependency" ]]; then
+                canonical_path="$(readlink -f "$resolved_path")"
+                expected_path="$package_root/$dependency"
+                if [[ "$canonical_path" != "$expected_path" ]]; then
                   echo 'ReXGlue dependency resolved outside the archive' >&2
                   exit 1
                 fi
