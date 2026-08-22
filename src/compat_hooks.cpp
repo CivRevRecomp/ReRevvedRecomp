@@ -673,10 +673,6 @@ void RecordUnitStatLookup(const char*  stat,
     {
         return;
     }
-    if (unit_stat_probe.seen_count == unit_stat_probe.seen.size())
-    {
-        return;
-    }
     unit_stat_probe.seen[unit_stat_probe.seen_count++] = key;
 
     uint8_t base_value = 0;
@@ -689,7 +685,6 @@ void RecordUnitStatLookup(const char*  stat,
     }
 
     const bool player_human =
-        player < 32 &&
         (human_player_mask & (uint32_t{ 1 } << player)) != 0;
     REXLOG_INFO(
         "QoL unit-stat probe: consumer={} stat={} player={} unit={} base={} "
@@ -819,11 +814,8 @@ void ReRevvedProbeUnitMoveApplyBegin(PPCRegister& r31,
     unit_move_apply_probe.begin = std::chrono::steady_clock::now();
     if (r31.u32 < 6 && r15.u32 < 256)
     {
-        constexpr uint32_t kUnitTable = 0x830F2BF0;
-        constexpr uint32_t kUnitSize  = 84;
-        const uint32_t     index      = (r31.u32 << 8) + r15.u32;
         unit_move_apply_probe.unit_record_address =
-            kUnitTable + index * kUnitSize;
+            UnitRecordAddress(r31.u32, r15.u32);
         unit_move_apply_probe.apply_snapshot_valid = CaptureUnitRecord(
             unit_move_apply_probe.unit_record_address,
             unit_move_apply_probe.apply_snapshot);
@@ -1687,8 +1679,7 @@ void ReRevvedProbeSaveSlotLoadBegin(PPCRegister& r4)
     constexpr uint32_t   kInternalSlotIdOffset = 0x108;
     std::array<char, 43> slot{};
     const uint32_t       slot_address = r4.u32 + kInternalSlotIdOffset;
-    const bool           valid        = r4.u32 <= UINT32_MAX - kInternalSlotIdOffset &&
-                                        TryReadGuestText(slot_address, slot);
+    const bool           valid        = TryReadGuestText(slot_address, slot);
     REXLOG_INFO(
         "QoL save-slot probe: load-begin record={:08X} slot={} valid={}",
         r4.u32,
