@@ -16,8 +16,6 @@ permissions:
 
 env:
   ASSETS_REPO: ${{ vars.ASSETS_REPO }}
-  ASSET_PATH: ${{ vars.ASSET_PATH }}
-  ASSET_XEXP_PATH: ${{ vars.ASSET_XEXP_PATH }}
   EXPECTED_XEX_SIZE: '16822272'
   EXPECTED_XEXP_SIZE: '3291136'
 
@@ -111,6 +109,10 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.ASSETS_TOKEN }}
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: credential.helper
+          GIT_CONFIG_VALUE_0: '!gh auth git-credential'
+          GIT_LFS_SKIP_SMUDGE: '1'
         run: |
           if (-not $env:GH_TOKEN) {
             throw 'ASSETS_TOKEN secret is empty or missing'
@@ -118,32 +120,35 @@ jobs:
           if ($env:ASSETS_REPO -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
             throw 'Set ASSETS_REPO to owner/repository'
           }
-          New-Item -ItemType Directory -Force -Path (Join-Path $PWD 'game') |
-            Out-Null
-          $ProgressPreference = 'SilentlyContinue'
-          $assets = @(
-            @{ Path = $env:ASSET_PATH;      File = 'default.xex' },
-            @{ Path = $env:ASSET_XEXP_PATH; File = 'default.xexp' }
-          )
-          foreach ($asset in $assets) {
-            if ($asset.Path -notmatch '^[A-Za-z0-9._/-]+$' -or
-                $asset.Path.StartsWith('/') -or
-                $asset.Path.Split('/') -contains '..') {
-              throw 'Set the asset path variables to repository-relative file paths'
-            }
-            $destination = Join-Path $PWD ('game\' + $asset.File)
-            try {
-              Invoke-WebRequest `
-                -Uri "https://api.github.com/repos/$env:ASSETS_REPO/contents/$($asset.Path)" `
-                -Headers @{
-                  Authorization = "Bearer $env:GH_TOKEN"
-                  Accept        = 'application/vnd.github.raw+json'
-                } `
-                -OutFile $destination
-            } catch {
-              Remove-Item -LiteralPath $destination -ErrorAction SilentlyContinue
-              throw "Private asset download failed: $($_.Exception.Message)"
-            }
+          git lfs version
+          if ($LASTEXITCODE -ne 0) { throw 'Git LFS is unavailable' }
+          $assetsRoot = Join-Path $env:RUNNER_TEMP 'rerevved-assets'
+          git clone --quiet --depth 1 --branch main --single-branch `
+            "https://github.com/$env:ASSETS_REPO" $assetsRoot
+          if ($LASTEXITCODE -ne 0) { throw 'Private asset clone failed' }
+          git -C $assetsRoot lfs pull `
+            --include='game/default.xex,game/default.xexp' --exclude=''
+          if ($LASTEXITCODE -ne 0) { throw 'Private asset LFS pull failed' }
+          $gameRoot = Join-Path $PWD 'game'
+          New-Item -ItemType Directory -Force -Path $gameRoot | Out-Null
+          Copy-Item -LiteralPath (Join-Path $assetsRoot 'game\default.xex') `
+            -Destination (Join-Path $gameRoot 'default.xex')
+          Copy-Item -LiteralPath (Join-Path $assetsRoot 'game\default.xexp') `
+            -Destination (Join-Path $gameRoot 'default.xexp')
+
+      - name: Clean up private asset checkout
+        if: always()
+        shell: pwsh
+        run: |
+          $tempRoot = [System.IO.Path]::GetFullPath($env:RUNNER_TEMP)
+          $assetsRoot = [System.IO.Path]::GetFullPath(
+            (Join-Path $tempRoot 'rerevved-assets'))
+          if ([System.IO.Path]::GetDirectoryName($assetsRoot) -ne
+              $tempRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar)) {
+            throw 'Refusing unsafe private asset cleanup'
+          }
+          if (Test-Path -LiteralPath $assetsRoot) {
+            Remove-Item -LiteralPath $assetsRoot -Recurse -Force
           }
 
       - name: Validate codegen input
@@ -309,6 +314,10 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.ASSETS_TOKEN }}
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: credential.helper
+          GIT_CONFIG_VALUE_0: '!gh auth git-credential'
+          GIT_LFS_SKIP_SMUDGE: '1'
         run: |
           if (-not $env:GH_TOKEN) {
             throw 'ASSETS_TOKEN secret is empty or missing'
@@ -316,32 +325,35 @@ jobs:
           if ($env:ASSETS_REPO -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
             throw 'Set ASSETS_REPO to owner/repository'
           }
+          git lfs version
+          if ($LASTEXITCODE -ne 0) { throw 'Git LFS is unavailable' }
+          $assetsRoot = Join-Path $env:RUNNER_TEMP 'rerevved-assets'
+          git clone --quiet --depth 1 --branch main --single-branch `
+            "https://github.com/$env:ASSETS_REPO" $assetsRoot
+          if ($LASTEXITCODE -ne 0) { throw 'Private asset clone failed' }
+          git -C $assetsRoot lfs pull `
+            --include='game/default.xex,game/default.xexp' --exclude=''
+          if ($LASTEXITCODE -ne 0) { throw 'Private asset LFS pull failed' }
           $gameRoot = Join-Path $PWD 'game'
           New-Item -ItemType Directory -Force -Path $gameRoot | Out-Null
-          $ProgressPreference = 'SilentlyContinue'
-          $assets = @(
-            @{ Path = $env:ASSET_PATH;      File = 'default.xex' },
-            @{ Path = $env:ASSET_XEXP_PATH; File = 'default.xexp' }
-          )
-          foreach ($asset in $assets) {
-            if ($asset.Path -notmatch '^[A-Za-z0-9._/-]+$' -or
-                $asset.Path.StartsWith('/') -or
-                $asset.Path.Split('/') -contains '..') {
-              throw 'Set the asset path variables to repository-relative file paths'
-            }
-            $destination = Join-Path $gameRoot $asset.File
-            try {
-              Invoke-WebRequest `
-                -Uri "https://api.github.com/repos/$env:ASSETS_REPO/contents/$($asset.Path)" `
-                -Headers @{
-                  Authorization = "Bearer $env:GH_TOKEN"
-                  Accept        = 'application/vnd.github.raw+json'
-                } `
-                -OutFile $destination
-            } catch {
-              Remove-Item -LiteralPath $destination -ErrorAction SilentlyContinue
-              throw "Private asset download failed: $($_.Exception.Message)"
-            }
+          Copy-Item -LiteralPath (Join-Path $assetsRoot 'game/default.xex') `
+            -Destination (Join-Path $gameRoot 'default.xex')
+          Copy-Item -LiteralPath (Join-Path $assetsRoot 'game/default.xexp') `
+            -Destination (Join-Path $gameRoot 'default.xexp')
+
+      - name: Clean up private asset checkout
+        if: always()
+        shell: pwsh
+        run: |
+          $tempRoot = [System.IO.Path]::GetFullPath($env:RUNNER_TEMP)
+          $assetsRoot = [System.IO.Path]::GetFullPath(
+            (Join-Path $tempRoot 'rerevved-assets'))
+          if ([System.IO.Path]::GetDirectoryName($assetsRoot) -ne
+              $tempRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar)) {
+            throw 'Refusing unsafe private asset cleanup'
+          }
+          if (Test-Path -LiteralPath $assetsRoot) {
+            Remove-Item -LiteralPath $assetsRoot -Recurse -Force
           }
 
       - name: Validate codegen input
