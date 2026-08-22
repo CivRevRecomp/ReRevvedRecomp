@@ -3,8 +3,7 @@
 </p>
 
 <p align="center">
-Static recompilation of Civilization Revolution,<br>
-built on the ReXGlue runtime and GPU stack.
+Static recompilation of Civilization Revolution, built on the ReXGlue runtime and GPU stack.
 </p>
 
 <p align="center">
