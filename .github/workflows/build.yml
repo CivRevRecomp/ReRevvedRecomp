@@ -435,8 +435,58 @@ jobs:
               raise SystemExit("Archive directory allowlist entry has the wrong type")
           if any(not seen[name].isfile() for name in expected_files):
               raise SystemExit("Archive file allowlist entry has the wrong type")
+          if seen[f"{root}/rerevved"].mode & 0o111 == 0:
+              raise SystemExit("Linux executable has no executable mode bit")
           print("Linux archive allowlist: PASS")
           PY
+
+          extract_root="$(mktemp -d "$RUNNER_TEMP/rerevved-package.XXXXXX")"
+          cleanup_extract() {
+            if [[ "$extract_root" == "$RUNNER_TEMP"/rerevved-package.* ]]; then
+              rm -rf -- "$extract_root"
+            else
+              echo 'Refusing unsafe package cleanup' >&2
+              return 1
+            fi
+          }
+          trap cleanup_extract EXIT
+
+          archive_name="$(basename "${archives[0]}" .tar.gz)"
+          tar -xzf "${archives[0]}" -C "$extract_root"
+          package_root="$extract_root/$archive_name"
+
+          if ! readelf -d "$package_root/rerevved" |
+              grep -Eq "\\((RPATH|RUNPATH)\\).*\\\$ORIGIN"; then
+            echo "Linux executable lacks an \$ORIGIN RPATH or RUNPATH" >&2
+            exit 1
+          fi
+
+          runtime_line='^[[:space:]]*(librexruntime\.so|librexgpu-xenos\.so|libTracyClient\.so)[[:space:]]*=>[[:space:]]*([^[:space:]]+)'
+          resolved_dependencies=0
+          for binary in rerevved librexruntime.so librexgpu-xenos.so libTracyClient.so; do
+            ldd_output="$(ldd "$package_root/$binary")"
+            if grep -Fq 'not found' <<<"$ldd_output"; then
+              echo "Linux archive dependency is missing for $binary" >&2
+              exit 1
+            fi
+            while IFS= read -r line; do
+              if [[ "$line" =~ $runtime_line ]]; then
+                dependency="${BASH_REMATCH[1]}"
+                resolved_path="${BASH_REMATCH[2]}"
+                if [[ "$(readlink -f "$resolved_path")" !=
+                    "$package_root/$dependency" ]]; then
+                  echo 'ReXGlue dependency resolved outside the archive' >&2
+                  exit 1
+                fi
+                ((resolved_dependencies += 1))
+              fi
+            done <<<"$ldd_output"
+          done
+          if ((resolved_dependencies == 0)); then
+            echo 'No ReXGlue archive dependencies were resolved' >&2
+            exit 1
+          fi
+          echo 'Linux archive linkage: PASS'
 
       - name: Upload archive
         uses: actions/upload-artifact@v4
